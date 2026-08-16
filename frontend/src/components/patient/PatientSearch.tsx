@@ -2,6 +2,7 @@ import { useMemo, useState, type FormEvent } from 'react';
 import { FilePlus2, Loader2, Search, UserRound } from 'lucide-react';
 import api from '../../services/api';
 import type { PacienteExpediente } from '../../types';
+import { parseNombreCompleto } from '../../lib/parseNombreCompleto';
 import PatientCreateModal from './PatientCreateModal';
 
 type Props = {
@@ -23,10 +24,10 @@ export default function PatientSearch({ onSelect }: Props) {
   const seed = useMemo(() => {
     const trimmed = q.trim();
     if (looksLikeCurp(trimmed)) return { curp: trimmed.toUpperCase() };
-    const parts = trimmed.split(/\s+/).filter(Boolean);
+    const parsed = parseNombreCompleto(trimmed);
     return {
-      nombre: parts[0] || '',
-      apellido_paterno: parts.slice(1).join(' '),
+      ...parsed,
+      nombre_completo: trimmed,
     };
   }, [q]);
 

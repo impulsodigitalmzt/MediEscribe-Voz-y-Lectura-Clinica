@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import api from '../../services/api';
 import type { ConsultaHistorialItem, PacienteExpediente } from '../../types';
+import { composeNombreCompleto, parseNombreCompleto } from '../../lib/parseNombreCompleto';
+import NombreCompletoFields from './NombreCompletoFields';
 import {
   AlertCircle, FilePlus2, Loader2, Search, ShieldCheck, UserRound, X,
 } from 'lucide-react';
-import clsx from 'clsx';
 
 type Props = {
   selected: PacienteExpediente | null;
@@ -15,6 +16,7 @@ type Props = {
 };
 
 const EMPTY_ALTA = {
+  nombre_completo: '',
   nombre: '',
   apellido_paterno: '',
   apellido_materno: '',
@@ -27,6 +29,33 @@ const EMPTY_ALTA = {
   cronicos: '',
   consentimiento: false,
 };
+
+function seedAltaFromSearch(
+  q: string,
+  query: { apellido_paterno: string; apellido_materno: string; fecha_nacimiento: string },
+  prev: typeof EMPTY_ALTA,
+): typeof EMPTY_ALTA {
+  const trimmed = q.trim();
+  if (looksLikeCurp(trimmed)) {
+    return {
+      ...prev,
+      curp: trimmed.toUpperCase(),
+      fecha_nacimiento: query.fecha_nacimiento || prev.fecha_nacimiento,
+    };
+  }
+  const parsed = parseNombreCompleto(trimmed);
+  const nombre = parsed.nombre || prev.nombre;
+  const apellido_paterno = query.apellido_paterno || parsed.apellido_paterno || prev.apellido_paterno;
+  const apellido_materno = query.apellido_materno || parsed.apellido_materno || prev.apellido_materno;
+  return {
+    ...prev,
+    nombre,
+    apellido_paterno,
+    apellido_materno,
+    nombre_completo: composeNombreCompleto({ nombre, apellido_paterno, apellido_materno }) || trimmed,
+    fecha_nacimiento: query.fecha_nacimiento || prev.fecha_nacimiento,
+  };
+}
 
 function looksLikeCurp(value: string): boolean {
   return /^[A-Z0-9]{18}$/i.test(value.trim());
@@ -78,15 +107,7 @@ export default function PatientIdentificationScreen({
       setShowAlta(result.alta_requerida);
       setSearched(true);
       if (result.alta_requerida) {
-        const parts = trimmed.split(/\s+/).filter(Boolean);
-        setAlta((prev) => ({
-          ...prev,
-          nombre: parts[0] || prev.nombre,
-          apellido_paterno: query.apellido_paterno || parts.slice(1).join(' ') || prev.apellido_paterno,
-          apellido_materno: query.apellido_materno || prev.apellido_materno,
-          fecha_nacimiento: query.fecha_nacimiento || prev.fecha_nacimiento,
-          curp: looksLikeCurp(trimmed) ? trimmed.toUpperCase() : prev.curp,
-        }));
+        setAlta((prev) => seedAltaFromSearch(trimmed, query, prev));
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'No se pudo buscar el expediente.');
@@ -294,14 +315,7 @@ export default function PatientIdentificationScreen({
           disabled={locked}
           onClick={() => {
             setShowAlta(true);
-            const parts = q.trim().split(/\s+/).filter(Boolean);
-            setAlta((prev) => ({
-              ...prev,
-              nombre: parts[0] || prev.nombre,
-              apellido_paterno: query.apellido_paterno || parts.slice(1).join(' ') || prev.apellido_paterno,
-              fecha_nacimiento: query.fecha_nacimiento || prev.fecha_nacimiento,
-              curp: looksLikeCurp(q) ? q.trim().toUpperCase() : prev.curp,
-            }));
+            setAlta((prev) => seedAltaFromSearch(q, query, prev));
           }}
         >
           Paciente nuevo — dar de alta
@@ -323,9 +337,15 @@ export default function PatientIdentificationScreen({
             Obligatorio: nombre, apellido paterno, fecha de nacimiento, sexo y domicilio (NOM-004 5.2.3 / 5.9).
           </p>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <Field required label="Nombre(s)" value={alta.nombre} onChange={(v) => setAlta((a) => ({ ...a, nombre: v }))} />
-            <Field required label="Apellido paterno" value={alta.apellido_paterno} onChange={(v) => setAlta((a) => ({ ...a, apellido_paterno: v }))} />
-            <Field label="Apellido materno" value={alta.apellido_materno} onChange={(v) => setAlta((a) => ({ ...a, apellido_materno: v }))} />
+            <NombreCompletoFields
+              value={{
+                nombre_completo: alta.nombre_completo,
+                nombre: alta.nombre,
+                apellido_paterno: alta.apellido_paterno,
+                apellido_materno: alta.apellido_materno,
+              }}
+              onChange={(next) => setAlta((prev) => ({ ...prev, ...next }))}
+            />
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1">Fecha de nacimiento *</label>
               <input required type="date" value={alta.fecha_nacimiento} onChange={(e) => setAlta((a) => ({ ...a, fecha_nacimiento: e.target.value }))} className="input-field" />

@@ -1,5 +1,6 @@
 import type { Sql } from "../db.js";
 import { AppError } from "./errors";
+import { parseNombreCompleto } from "./parse-nombre";
 
 export type AntecedentesImportantes = {
   alergias: string;
@@ -191,7 +192,7 @@ export async function buscarPacientes(
   let curp = normalizeCurp(query.curp);
   let nombre = (query.nombre ?? "").trim();
   let apellidoPaterno = (query.apellido_paterno ?? "").trim();
-  const apellidoMaterno = (query.apellido_materno ?? "").trim();
+  let apellidoMaterno = (query.apellido_materno ?? "").trim();
   const fecha = (query.fecha_nacimiento ?? "").trim();
   const expediente = normalizeExpediente(q);
 
@@ -233,9 +234,10 @@ export async function buscarPacientes(
     curp = qCurp;
   } else if (q && !nombre) {
     if (!apellidoPaterno) {
-      const parts = q.split(/\s+/).filter(Boolean);
-      nombre = parts[0] ?? "";
-      if (parts.length > 1) apellidoPaterno = parts.slice(1).join(" ");
+      const parsed = parseNombreCompleto(q);
+      nombre = parsed.nombre;
+      apellidoPaterno = parsed.apellido_paterno;
+      if (!apellidoMaterno) apellidoMaterno = parsed.apellido_materno;
     } else {
       nombre = q;
     }
@@ -322,9 +324,15 @@ export async function buscarPacientes(
 }
 
 export async function crearPaciente(sql: Sql, input: PacienteAlta): Promise<PacientePublico> {
-  const nombre = input.nombre.trim();
-  const apellidoPaterno = input.apellido_paterno.trim();
-  const apellidoMaterno = (input.apellido_materno ?? "").trim();
+  let nombre = input.nombre.trim();
+  let apellidoPaterno = input.apellido_paterno.trim();
+  let apellidoMaterno = (input.apellido_materno ?? "").trim();
+  if (!apellidoPaterno && /\s/.test(nombre)) {
+    const parsed = parseNombreCompleto(nombre);
+    nombre = parsed.nombre;
+    apellidoPaterno = parsed.apellido_paterno;
+    apellidoMaterno = parsed.apellido_materno || apellidoMaterno;
+  }
   const fecha = input.fecha_nacimiento.trim();
   const sexo = (input.sexo ?? "").trim();
   const domicilio = (input.domicilio ?? "").trim();

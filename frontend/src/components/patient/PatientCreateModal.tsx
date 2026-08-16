@@ -2,12 +2,16 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { FilePlus2, Loader2, ShieldCheck, X } from 'lucide-react';
 import api from '../../services/api';
 import type { PacienteExpediente } from '../../types';
+import { composeNombreCompleto, parseNombreCompleto } from '../../lib/parseNombreCompleto';
+import NombreCompletoFields from './NombreCompletoFields';
 
 type Props = {
   open: boolean;
   seed?: Partial<{
     nombre: string;
     apellido_paterno: string;
+    apellido_materno: string;
+    nombre_completo: string;
     curp: string;
   }>;
   onClose: () => void;
@@ -15,6 +19,7 @@ type Props = {
 };
 
 const EMPTY = {
+  nombre_completo: '',
   nombre: '',
   apellido_paterno: '',
   apellido_materno: '',
@@ -36,13 +41,20 @@ export default function PatientCreateModal({ open, seed, onClose, onCreated }: P
   useEffect(() => {
     if (!open) return;
     setError('');
+    const parsed = seed?.nombre_completo
+      ? parseNombreCompleto(seed.nombre_completo)
+      : {
+          nombre: seed?.nombre ?? '',
+          apellido_paterno: seed?.apellido_paterno ?? '',
+          apellido_materno: seed?.apellido_materno ?? '',
+        };
     setForm({
       ...EMPTY,
-      nombre: seed?.nombre ?? '',
-      apellido_paterno: seed?.apellido_paterno ?? '',
+      ...parsed,
+      nombre_completo: seed?.nombre_completo || composeNombreCompleto(parsed),
       curp: seed?.curp ?? '',
     });
-  }, [open, seed?.nombre, seed?.apellido_paterno, seed?.curp]);
+  }, [open, seed?.nombre, seed?.apellido_paterno, seed?.apellido_materno, seed?.nombre_completo, seed?.curp]);
 
   if (!open) return null;
 
@@ -98,9 +110,15 @@ export default function PatientCreateModal({ open, seed, onClose, onCreated }: P
           )}
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <Field label="Nombre(s)" required value={form.nombre} onChange={(v) => update('nombre', v)} />
-            <Field label="Apellido paterno" required value={form.apellido_paterno} onChange={(v) => update('apellido_paterno', v)} />
-            <Field label="Apellido materno" value={form.apellido_materno} onChange={(v) => update('apellido_materno', v)} />
+            <NombreCompletoFields
+              value={{
+                nombre_completo: form.nombre_completo,
+                nombre: form.nombre,
+                apellido_paterno: form.apellido_paterno,
+                apellido_materno: form.apellido_materno,
+              }}
+              onChange={(next) => setForm((prev) => ({ ...prev, ...next }))}
+            />
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1">Fecha de nacimiento *</label>
               <input

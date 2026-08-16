@@ -78,7 +78,10 @@ export default function LoginPage() {
           </div>
 
           <h2 className="text-2xl font-bold text-slate-800 mb-1">Iniciar sesión</h2>
-          <p className="text-slate-500 mb-8">Acceda a su consultorio digital</p>
+          <p className="text-slate-500 mb-2">Acceda a su consultorio digital</p>
+          <p className="text-xs text-teal-700 bg-teal-50 border border-teal-100 rounded-lg px-3 py-2 mb-6">
+            Cuenta de prueba lista: pulse <strong>Entrar</strong> (no hace falta escribir nada).
+          </p>
 
           {error && (
             <div className="flex items-center gap-2 p-3 mb-6 rounded-xl bg-red-50 border border-red-200 text-red-700 text-sm animate-slide-up">

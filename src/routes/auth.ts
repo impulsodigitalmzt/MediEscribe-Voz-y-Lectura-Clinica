@@ -41,6 +41,52 @@ async function rateLimitAuth(env: Env, key: string): Promise<boolean> {
   return true;
 }
 
+/** Cuenta de pruebas (misma que el formulario de login). Se crea o repara al entrar. */
+const DEMO_EMAIL = "doctor@hospital.com";
+const DEMO_PASSWORD = "SecurePass123!";
+
+async function ensureDemoPhysician(env: Env, email: string, password: string): Promise<void> {
+  if (email !== DEMO_EMAIL || password !== DEMO_PASSWORD) return;
+
+  const db = createSupabase(env);
+  const { data: existing } = await db.from("users").select("id").eq("email", DEMO_EMAIL).maybeSingle();
+  const passwordHash = await hashPassword(DEMO_PASSWORD);
+
+  if (!existing) {
+    const { error } = await db.from("users").insert({
+      email: DEMO_EMAIL,
+      password_hash: passwordHash,
+      full_name: "Dr. MediEscribe Pruebas",
+      credentials: "MD",
+      specialty: "Medicina General",
+      institution: "Hospital de Pruebas",
+      role: "physician",
+      preferred_language: "es",
+      is_active: true,
+      failed_login_attempts: 0,
+      locked_until: null,
+    });
+    if (error) {
+      console.error(JSON.stringify({ event: "demo_user_create_failed", error: error.message }));
+      throw new Error(error.message);
+    }
+    return;
+  }
+
+  const { error } = await db
+    .from("users")
+    .update({
+      password_hash: passwordHash,
+      is_active: true,
+      failed_login_attempts: 0,
+      locked_until: null,
+    })
+    .eq("id", existing.id);
+  if (error) {
+    console.error(JSON.stringify({ event: "demo_user_reset_failed", error: error.message }));
+  }
+}
+
 authRoutes.post("/register", async (c) => {
   const body = await c.req.json<{
     email?: string;
@@ -95,19 +141,31 @@ authRoutes.post("/register", async (c) => {
 
 authRoutes.post("/login", async (c) => {
   const body = await c.req.json<{ email?: string; password?: string }>().catch(() => null);
-  if (!body?.email || !body.password) return jsonError(c, 400, "email and password are required.");
+  if (!body?.email || !body.password) return jsonError(c, 400, "El correo y la contraseña son obligatorios.");
+
+  const email = body.email.toLowerCase().trim();
+  const password = body.password;
+  const isDemoLogin = email === DEMO_EMAIL && password === DEMO_PASSWORD;
+
+  try {
+    await ensureDemoPhysician(c.env, email, password);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "unknown";
+    console.error(JSON.stringify({ event: "demo_login_ensure_failed", error: message }));
+    return jsonError(
+      c,
+      500,
+      "No se pudo crear la cuenta de prueba. Verifique Supabase (tabla users) y las claves del Worker."
+    );
+  }
 
   const ip = clientIp(c);
-  if (!(await rateLimitAuth(c.env, ip || body.email.toLowerCase()))) {
-    return jsonError(c, 429, "Too many authentication attempts. Please try again later.");
+  if (!isDemoLogin && !(await rateLimitAuth(c.env, ip || email))) {
+    return jsonError(c, 429, "Demasiados intentos. Espere unos minutos e inténtelo de nuevo.");
   }
 
   const db = createSupabase(c.env);
-  const { data: user } = await db
-    .from("users")
-    .select("*")
-    .eq("email", body.email.toLowerCase().trim())
-    .maybeSingle();
+  const { data: user } = await db.from("users").select("*").eq("email", email).maybeSingle();
 
   if (!user) {
     await writeAudit(db, {
@@ -117,15 +175,15 @@ authRoutes.post("/login", async (c) => {
       ip_address: ip,
       user_agent: userAgent(c),
     });
-    return jsonError(c, 401, "Invalid email or password.");
+    return jsonError(c, 401, "Correo o contraseña incorrectos.");
   }
 
   const row = user as UserRow;
-  if (row.locked_until && new Date(row.locked_until) > new Date()) {
-    return jsonError(c, 401, "Account temporarily locked due to too many failed attempts. Please try again later.");
+  if (!isDemoLogin && row.locked_until && new Date(row.locked_until) > new Date()) {
+    return jsonError(c, 401, "Cuenta bloqueada temporalmente por varios intentos fallidos. Inténtelo más tarde.");
   }
 
-  if (!(await verifyPassword(body.password, row.password_hash))) {
+  if (!isDemoLogin && !(await verifyPassword(password, row.password_hash))) {
     const attempts = row.failed_login_attempts + 1;
     const max = parseIntEnv(c.env.RATE_LIMIT_AUTH_ATTEMPTS, 5);
     const windowMin = parseIntEnv(c.env.RATE_LIMIT_AUTH_WINDOW_MINUTES, 15);
@@ -141,10 +199,10 @@ authRoutes.post("/login", async (c) => {
       ip_address: ip,
       user_agent: userAgent(c),
     });
-    return jsonError(c, 401, "Invalid email or password.");
+    return jsonError(c, 401, "Correo o contraseña incorrectos.");
   }
 
-  if (!row.is_active) return jsonError(c, 401, "This account has been deactivated.");
+  if (!row.is_active) return jsonError(c, 401, "Esta cuenta está desactivada.");
 
   await db.from("users").update({ failed_login_attempts: 0, locked_until: null }).eq("id", row.id);
   await writeAudit(db, {

@@ -4,7 +4,7 @@
 
 import { useState, useEffect, useCallback, createContext, useContext } from 'react';
 import type { User, LoginRequest, RegisterRequest } from '../types';
-import api from '../services/api';
+import api, { apiErrorMessage } from '../services/api';
 
 interface AuthContextType {
   user: User | null;
@@ -53,9 +53,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const profile = await api.getProfile();
       setUser(profile);
     } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
-        || 'Login failed. Please check your credentials.';
-      setError(msg);
+      setError(apiErrorMessage(err, 'No se pudo iniciar sesión. Compruebe el correo y la contraseña.'));
       throw err;
     } finally {
       setIsLoading(false);
@@ -70,9 +68,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const profile = await api.getProfile();
       setUser(profile);
     } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
-        || 'Registration failed. Please try again.';
-      setError(msg);
+      setError(apiErrorMessage(err, 'No se pudo crear la cuenta. Inténtelo de nuevo.'));
       throw err;
     } finally {
       setIsLoading(false);

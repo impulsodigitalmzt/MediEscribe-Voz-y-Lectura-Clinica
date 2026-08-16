@@ -78,12 +78,24 @@ api.onError((err, c) => {
   return c.json({ detail: "An internal error occurred. Please try again." }, 500);
 });
 
+function isWorkerPath(pathname: string): boolean {
+  return (
+    pathname.startsWith("/api/") ||
+    pathname.startsWith("/webhook/") ||
+    pathname === "/health" ||
+    pathname === "/health/"
+  );
+}
+
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname.startsWith("/api/v1/ws/audio/")) {
       return handleAudioWebSocket(request, env);
     }
-    return api.fetch(request, env, ctx);
+    if (isWorkerPath(url.pathname)) {
+      return api.fetch(request, env, ctx);
+    }
+    return env.ASSETS.fetch(request);
   },
 } satisfies ExportedHandler<Env>;

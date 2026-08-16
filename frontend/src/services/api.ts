@@ -20,6 +20,21 @@ import type {
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '';
 
+function isCredentialAuthUrl(url?: string): boolean {
+  if (!url) return false;
+  return url.includes('/auth/login') || url.includes('/auth/register') || url.includes('/auth/refresh');
+}
+
+export function apiErrorMessage(err: unknown, fallback: string): string {
+  const ax = err as { response?: { data?: { detail?: unknown }; status?: number }; message?: string };
+  const detail = ax.response?.data?.detail;
+  if (typeof detail === 'string' && detail.trim()) return detail;
+  if (!ax.response) {
+    return 'No se pudo conectar con el servidor. Si está en Cloudflare, vuelva a publicar el Worker.';
+  }
+  return fallback;
+}
+
 class ApiService {
   private client: AxiosInstance;
   private refreshPromise: Promise<string> | null = null;
@@ -31,9 +46,9 @@ class ApiService {
       timeout: 90000, // Groq note generation can take 20–40s on long transcripts
     });
 
-    // Request interceptor — attach access token
     this.client.interceptors.request.use(
       (config: InternalAxiosRequestConfig) => {
+        if (isCredentialAuthUrl(config.url)) return config;
         const token = this.getAccessToken();
         if (token && config.headers) {
           config.headers.Authorization = `Bearer ${token}`;
@@ -43,11 +58,13 @@ class ApiService {
       (error) => Promise.reject(error)
     );
 
-    // Response interceptor — handle 401 with token refresh
     this.client.interceptors.response.use(
       (response) => response,
       async (error) => {
         const originalRequest = error.config;
+        if (isCredentialAuthUrl(originalRequest?.url)) {
+          return Promise.reject(error);
+        }
         if (error.response?.status === 401 && !originalRequest._retry) {
           originalRequest._retry = true;
           try {
@@ -115,12 +132,18 @@ class ApiService {
 
   async login(credentials: LoginRequest): Promise<AuthTokens> {
     const { data } = await this.client.post<AuthTokens>('/auth/login', credentials);
+    if (!data?.access_token || !data?.refresh_token) {
+      throw new Error('El servidor no devolvió una sesión válida.');
+    }
     this.setTokens(data);
     return data;
   }
 
   async register(details: RegisterRequest): Promise<AuthTokens> {
     const { data } = await this.client.post<AuthTokens>('/auth/register', details);
+    if (!data?.access_token || !data?.refresh_token) {
+      throw new Error('El servidor no devolvió una sesión válida.');
+    }
     this.setTokens(data);
     return data;
   }

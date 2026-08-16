@@ -31,12 +31,13 @@ export function createSql(databaseUrl: string): Sql {
   }
 
   const httpSql = neon(databaseUrl);
+  const nativeQuery = httpSql.query.bind(httpSql);
   const sql = httpSql as unknown as Sql;
 
   sql.json = (value: unknown) => value;
   sql.query = (query: string, params?: unknown[]) =>
-    httpSql.query(query, params ?? []) as Promise<Record<string, unknown>[]>;
-  sql.unsafe = (query: string) => sql.query(query);
+    nativeQuery(query, params ?? []) as Promise<Record<string, unknown>[]>;
+  sql.unsafe = (query: string) => nativeQuery(query) as Promise<Record<string, unknown>[]>;
   sql.end = async () => undefined;
 
   return sql;

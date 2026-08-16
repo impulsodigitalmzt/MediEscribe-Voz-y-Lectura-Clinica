@@ -9,12 +9,24 @@ let schemaReady = false;
 export async function ensureExpedienteSchema(sql: Sql): Promise<void> {
   if (schemaReady) return;
 
+  const flags = await sql`
+    SELECT
+      to_regclass('public.users') IS NOT NULL AS has_users,
+      to_regclass('public.pacientes') IS NOT NULL AS has_pacientes
+  `;
+  const existing = (flags[0] ?? {}) as { has_users?: boolean; has_pacientes?: boolean };
+  if (existing.has_users && existing.has_pacientes) {
+    schemaReady = true;
+    return;
+  }
+
   try {
     await sql`CREATE EXTENSION IF NOT EXISTS pgcrypto`;
   } catch {
     /* Neon a veces ya trae gen_random_uuid(); no bloquear el arranque */
   }
 
+  if (!existing.has_pacientes) {
   await sql`
     CREATE TABLE IF NOT EXISTS schema_migrations (
       name TEXT PRIMARY KEY,
@@ -256,6 +268,13 @@ export async function ensureExpedienteSchema(sql: Sql): Promise<void> {
     `);
   } catch {
     /* trigger ya existe */
+  }
+
+  } // !has_pacientes
+
+  if (existing.has_users) {
+    schemaReady = true;
+    return;
   }
 
   await sql`ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS details JSONB NOT NULL DEFAULT '{}'::jsonb`;

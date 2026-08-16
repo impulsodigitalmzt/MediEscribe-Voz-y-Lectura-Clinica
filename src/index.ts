@@ -93,7 +93,8 @@ export default {
     if (url.pathname.startsWith("/api/v1/ws/audio/")) {
       return handleAudioWebSocket(request, env);
     }
-    if (isWorkerPath(url.pathname)) {
+    const mutating = request.method !== "GET" && request.method !== "HEAD";
+    if (isWorkerPath(url.pathname) || mutating) {
       return api.fetch(request, env, ctx);
     }
     return env.ASSETS.fetch(request);

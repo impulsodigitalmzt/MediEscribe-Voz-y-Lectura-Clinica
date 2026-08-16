@@ -1,16 +1,27 @@
 import { Hono } from "hono";
 import { requireAuth, requireRoles, type AuthContext } from "../lib/auth";
 import {
-  createSupabase,
   EDITABLE_SECTIONS,
   NOTE_JSON_FIELDS,
   noteSnapshot,
   publicEncounter,
   publicNote,
+} from "../lib/models";
+import {
+  deleteEncounter,
+  findEncounter,
+  getNoteByEncounter,
+  insertConsent,
+  insertEncounter,
+  insertNoteVersion,
+  listEncounters,
+  listNoteVersions,
+  listTranscripts,
+  updateClinicalNote,
+  updateEncounter,
+  withNeon,
   writeAudit,
-  type EncounterRow,
-  type NoteRow,
-} from "../lib/supabase";
+} from "../lib/neon-store";
 import { decryptText, encryptText, generateEncounterCode } from "../lib/security";
 import { generateClinicalPdf } from "../lib/pdf";
 import { generateAndStoreNote, getTranscriptText, storeTranscript } from "../lib/notes";
@@ -25,21 +36,6 @@ type AppEnv = { Bindings: Env; Variables: { auth: AuthContext } };
 export const encounterRoutes = new Hono<AppEnv>();
 
 encounterRoutes.use("*", requireAuth);
-
-async function loadEncounter(
-  env: Env,
-  encounterId: string,
-  userId: string
-): Promise<EncounterRow | null> {
-  const db = createSupabase(env);
-  const { data } = await db
-    .from("encounters")
-    .select("*")
-    .or(`id.eq.${encounterId},encounter_id.eq.${encounterId}`)
-    .eq("physician_id", userId)
-    .maybeSingle();
-  return (data as EncounterRow | null) ?? null;
-}
 
 encounterRoutes.post("/", requireRoles(["physician", "admin"]), async (c) => {
   const body = (await c.req.json<{
@@ -63,98 +59,90 @@ encounterRoutes.post("/", requireRoles(["physician", "admin"]), async (c) => {
   const template = body.specialty_template || "general_practice";
   if (!isValidTemplate(template)) return jsonError(c, 400, "Invalid specialty template.");
 
-  const db = createSupabase(c.env);
-  const { data, error } = await db
-    .from("encounters")
-    .insert({
-      encounter_id: generateEncounterCode(),
-      physician_id: c.get("auth").user_id,
-      patient_name: await encryptText(c.env.SECRET_KEY, body.patient_name ?? ""),
-      patient_dob: await encryptText(c.env.SECRET_KEY, body.patient_dob ?? ""),
-      patient_mrn: await encryptText(c.env.SECRET_KEY, body.patient_mrn ?? ""),
-      specialty_template: template,
-      encounter_type: body.encounter_type || "regular",
-      spoken_language: body.spoken_language || "en",
-      output_language: body.output_language || "en",
-      status: "recording",
-      source: "web",
-    })
-    .select("*")
-    .single();
-
-  if (error || !data) {
-    console.error(JSON.stringify({ event: "encounter_create_failed", error: error?.message }));
+  try {
+    const data = await withNeon(c.env, async (sql) => {
+      const created = await insertEncounter(sql, {
+        encounter_id: generateEncounterCode(),
+        physician_id: c.get("auth").user_id,
+        patient_name: await encryptText(c.env.SECRET_KEY, body.patient_name ?? ""),
+        patient_dob: await encryptText(c.env.SECRET_KEY, body.patient_dob ?? ""),
+        patient_mrn: await encryptText(c.env.SECRET_KEY, body.patient_mrn ?? ""),
+        specialty_template: template,
+        encounter_type: body.encounter_type || "regular",
+        spoken_language: body.spoken_language || "en",
+        output_language: body.output_language || "en",
+        status: "recording",
+        source: "web",
+      });
+      await writeAudit(sql, {
+        user_id: c.get("auth").user_id,
+        action: "encounter.created",
+        resource_type: "encounter",
+        resource_id: created.id,
+        ip_address: clientIp(c),
+        user_agent: userAgent(c),
+      });
+      return created;
+    });
+    return c.json(publicEncounter(data), 201);
+  } catch (error) {
+    console.error(JSON.stringify({
+      event: "encounter_create_failed",
+      error: error instanceof Error ? error.message : "unknown",
+    }));
     return jsonError(c, 500, "Could not create encounter.");
   }
-
-  await writeAudit(db, {
-    user_id: c.get("auth").user_id,
-    action: "encounter.created",
-    resource_type: "encounter",
-    resource_id: data.id,
-    ip_address: clientIp(c),
-    user_agent: userAgent(c),
-  });
-  return c.json(publicEncounter(data as EncounterRow), 201);
 });
 
 encounterRoutes.get("/", async (c) => {
   const page = Math.max(1, Number.parseInt(c.req.query("page") ?? "1", 10));
   const pageSize = Math.min(100, Math.max(1, Number.parseInt(c.req.query("page_size") ?? "20", 10)));
   const statusFilter = c.req.query("status_filter");
-  const db = createSupabase(c.env);
-
-  let query = db
-    .from("encounters")
-    .select("*", { count: "exact" })
-    .eq("physician_id", c.get("auth").user_id)
-    .order("created_at", { ascending: false })
-    .range((page - 1) * pageSize, page * pageSize - 1);
-
-  if (statusFilter) query = query.eq("status", statusFilter);
-
-  const { data, count, error } = await query;
-  if (error) return jsonError(c, 500, "Could not list encounters.");
-
+  const { rows, total } = await withNeon(c.env, (sql) =>
+    listEncounters(sql, c.get("auth").user_id, page, pageSize, statusFilter || undefined)
+  );
   return c.json({
-    encounters: (data ?? []).map((row) => publicEncounter(row as EncounterRow)),
-    total: count ?? 0,
+    encounters: rows.map((row) => publicEncounter(row)),
+    total,
     page,
     page_size: pageSize,
   });
 });
 
 encounterRoutes.get("/:id", async (c) => {
-  const encounter = await loadEncounter(c.env, c.req.param("id") ?? "", c.get("auth").user_id);
+  const encounter = await withNeon(c.env, (sql) =>
+    findEncounter(sql, c.req.param("id") ?? "", c.get("auth").user_id)
+  );
   if (!encounter) return jsonError(c, 404, "Encounter not found.");
   return c.json(publicEncounter(encounter));
 });
 
 encounterRoutes.delete("/:id", requireRoles(["physician", "admin"]), async (c) => {
-  const encounter = await loadEncounter(c.env, c.req.param("id") ?? "", c.get("auth").user_id);
-  if (!encounter) return jsonError(c, 404, "Encounter not found.");
-  const db = createSupabase(c.env);
-  await writeAudit(db, {
-    user_id: c.get("auth").user_id,
-    action: "encounter.deleted",
-    resource_type: "encounter",
-    resource_id: encounter.id,
-    ip_address: clientIp(c),
+  const result = await withNeon(c.env, async (sql) => {
+    const encounter = await findEncounter(sql, c.req.param("id") ?? "", c.get("auth").user_id);
+    if (!encounter) return null;
+    await writeAudit(sql, {
+      user_id: c.get("auth").user_id,
+      action: "encounter.deleted",
+      resource_type: "encounter",
+      resource_id: encounter.id,
+      ip_address: clientIp(c),
+    });
+    await deleteEncounter(sql, encounter.id);
+    return encounter;
   });
-  const { error } = await db.from("encounters").delete().eq("id", encounter.id);
-  if (error) return jsonError(c, 500, "Could not delete encounter.");
+  if (!result) return jsonError(c, 404, "Encounter not found.");
   return c.json({ status: "deleted" });
 });
 
 async function transition(c: Parameters<typeof jsonError>[0], nextStatus: string) {
-  const encounter = await loadEncounter(c.env, c.req.param("id") ?? "", c.get("auth").user_id);
-  if (!encounter) return jsonError(c, 404, "Encounter not found.");
-  const db = createSupabase(c.env);
-  const { error } = await db
-    .from("encounters")
-    .update({ status: nextStatus, updated_at: new Date().toISOString() })
-    .eq("id", encounter.id);
-  if (error) return jsonError(c, 400, "Invalid status transition.");
+  const ok = await withNeon(c.env, async (sql) => {
+    const encounter = await findEncounter(sql, c.req.param("id") ?? "", c.get("auth").user_id);
+    if (!encounter) return false;
+    await updateEncounter(sql, encounter.id, { status: nextStatus });
+    return true;
+  });
+  if (!ok) return jsonError(c, 404, "Encounter not found.");
   return c.json({ status: nextStatus });
 }
 
@@ -163,41 +151,37 @@ encounterRoutes.post("/:id/resume", requireRoles(["physician"]), (c) => transiti
 encounterRoutes.post("/:id/stop", requireRoles(["physician"]), (c) => transition(c, "transcribing"));
 
 encounterRoutes.post("/:id/consent", requireRoles(["physician", "nurse"]), async (c) => {
-  const encounter = await loadEncounter(c.env, c.req.param("id") ?? "", c.get("auth").user_id);
-  if (!encounter) return jsonError(c, 404, "Encounter not found.");
   const body = await c.req.json<{ consent_type?: string; consented?: boolean; consented_by?: string }>();
-  const db = createSupabase(c.env);
-  const { data, error } = await db
-    .from("consent_records")
-    .insert({
+  const data = await withNeon(c.env, async (sql) => {
+    const encounter = await findEncounter(sql, c.req.param("id") ?? "", c.get("auth").user_id);
+    if (!encounter) return null;
+    const consent = await insertConsent(sql, {
       encounter_id: encounter.id,
       consent_type: body.consent_type ?? "recording",
       consented: Boolean(body.consented),
       consented_by: body.consented_by ?? "",
       recorded_by: c.get("auth").user_id,
-    })
-    .select("id, consented")
-    .single();
-  if (error || !data) return jsonError(c, 500, "Could not record consent.");
-  if (body.consented) {
-    await db.from("encounters").update({ consent_recorded: true }).eq("id", encounter.id);
-  }
+    });
+    if (body.consented) {
+      await updateEncounter(sql, encounter.id, { consent_recorded: true });
+    }
+    return consent;
+  });
+  if (!data) return jsonError(c, 404, "Encounter not found.");
   return c.json({ consent_id: data.id, consented: data.consented });
 });
 
 encounterRoutes.get("/:id/transcript", async (c) => {
-  const encounter = await loadEncounter(c.env, c.req.param("id") ?? "", c.get("auth").user_id);
-  if (!encounter) return jsonError(c, 404, "Encounter not found.");
-  const db = createSupabase(c.env);
-  const { data, error } = await db
-    .from("transcripts")
-    .select("*")
-    .eq("encounter_id", encounter.id)
-    .order("sequence_number", { ascending: true });
-  if (error) return jsonError(c, 500, "Could not load transcript.");
+  const payload = await withNeon(c.env, async (sql) => {
+    const encounter = await findEncounter(sql, c.req.param("id") ?? "", c.get("auth").user_id);
+    if (!encounter) return null;
+    const segments = await listTranscripts(sql, encounter.id);
+    return { encounter, segments };
+  });
+  if (!payload) return jsonError(c, 404, "Encounter not found.");
   return c.json({
     encounter_id: c.req.param("id") ?? "",
-    segments: (data ?? []).map((s) => ({
+    segments: payload.segments.map((s) => ({
       sequence: s.sequence_number,
       speaker: s.speaker_label,
       content: s.content,
@@ -210,24 +194,26 @@ encounterRoutes.get("/:id/transcript", async (c) => {
 });
 
 encounterRoutes.post("/:id/audio", requireRoles(["physician"]), async (c) => {
-  const encounter = await loadEncounter(c.env, c.req.param("id") ?? "", c.get("auth").user_id);
-  if (!encounter) return jsonError(c, 404, "Encounter not found.");
-
   try {
     const body = await parseMultipartBody(c);
     const audio = extractAudioFromBody(body);
     const whisper = await transcribeAudio(c.env, audio.blob, audio.filename);
-    const db = createSupabase(c.env);
-    await storeTranscript(db, encounter.id, whisper.text, "whisper", whisper.language || "auto", 1);
-    await db.from("encounters").update({ status: "transcribing" }).eq("id", encounter.id);
-    await writeAudit(db, {
-      user_id: c.get("auth").user_id,
-      action: "encounter.audio_transcribed",
-      resource_type: "encounter",
-      resource_id: encounter.id,
-      details: { filename: audio.filename, bytes: audio.size, language: whisper.language },
-      ip_address: clientIp(c),
+    const ok = await withNeon(c.env, async (sql) => {
+      const encounter = await findEncounter(sql, c.req.param("id") ?? "", c.get("auth").user_id);
+      if (!encounter) return false;
+      await storeTranscript(sql, encounter.id, whisper.text, "whisper", whisper.language || "auto", 1);
+      await updateEncounter(sql, encounter.id, { status: "transcribing" });
+      await writeAudit(sql, {
+        user_id: c.get("auth").user_id,
+        action: "encounter.audio_transcribed",
+        resource_type: "encounter",
+        resource_id: encounter.id,
+        details: { filename: audio.filename, bytes: audio.size, language: whisper.language },
+        ip_address: clientIp(c),
+      });
+      return true;
     });
+    if (!ok) return jsonError(c, 404, "Encounter not found.");
     return c.json({
       status: "transcript_received",
       text: whisper.text,
@@ -242,66 +228,75 @@ encounterRoutes.post("/:id/audio", requireRoles(["physician"]), async (c) => {
 });
 
 encounterRoutes.post("/:id/manual-transcript", requireRoles(["physician"]), async (c) => {
-  const encounter = await loadEncounter(c.env, c.req.param("id") ?? "", c.get("auth").user_id);
-  if (!encounter) return jsonError(c, 404, "Encounter not found.");
   const body = await c.req.json<{ text?: string }>();
   const text = (body.text ?? "").trim();
   if (!text) return jsonError(c, 400, "Transcript text cannot be empty.");
-  const db = createSupabase(c.env);
-  await storeTranscript(db, encounter.id, text, "manual_input", encounter.spoken_language, 1);
-  await db.from("encounters").update({ status: "transcribing" }).eq("id", encounter.id);
-  await writeAudit(db, {
-    user_id: c.get("auth").user_id,
-    action: "encounter.manual_transcript",
-    resource_type: "encounter",
-    resource_id: encounter.id,
-    details: { status: "manual_input" },
-    ip_address: clientIp(c),
+  const ok = await withNeon(c.env, async (sql) => {
+    const encounter = await findEncounter(sql, c.req.param("id") ?? "", c.get("auth").user_id);
+    if (!encounter) return false;
+    await storeTranscript(sql, encounter.id, text, "manual_input", encounter.spoken_language, 1);
+    await updateEncounter(sql, encounter.id, { status: "transcribing" });
+    await writeAudit(sql, {
+      user_id: c.get("auth").user_id,
+      action: "encounter.manual_transcript",
+      resource_type: "encounter",
+      resource_id: encounter.id,
+      details: { status: "manual_input" },
+      ip_address: clientIp(c),
+    });
+    return true;
   });
+  if (!ok) return jsonError(c, 404, "Encounter not found.");
   return c.json({ status: "transcript_received" });
 });
 
 encounterRoutes.post("/:id/transcript/manual", requireRoles(["physician"]), async (c) => {
-  const encounter = await loadEncounter(c.env, c.req.param("id") ?? "", c.get("auth").user_id);
-  if (!encounter) return jsonError(c, 404, "Encounter not found.");
   const body = await c.req.json<{ content?: string; speaker_label?: string }>();
   const content = (body.content ?? "").trim();
   if (!content) return jsonError(c, 400, "Content cannot be empty.");
-  const db = createSupabase(c.env);
-  const segment = await storeTranscript(
-    db,
-    encounter.id,
-    content,
-    body.speaker_label ?? "unknown",
-    encounter.spoken_language,
-    1
-  );
+  const segment = await withNeon(c.env, async (sql) => {
+    const encounter = await findEncounter(sql, c.req.param("id") ?? "", c.get("auth").user_id);
+    if (!encounter) return null;
+    return storeTranscript(
+      sql,
+      encounter.id,
+      content,
+      body.speaker_label ?? "unknown",
+      encounter.spoken_language,
+      1
+    );
+  });
+  if (!segment) return jsonError(c, 404, "Encounter not found.");
   return c.json({ id: segment.id, sequence: segment.sequence_number });
 });
 
 encounterRoutes.post("/:id/generate-note", requireRoles(["physician"]), async (c) => {
-  const encounter = await loadEncounter(c.env, c.req.param("id") ?? "", c.get("auth").user_id);
-  if (!encounter) return jsonError(c, 404, "Encounter not found.");
-  const db = createSupabase(c.env);
-  if (!encounter.consent_recorded) {
-    return jsonError(c, 400, "Recording consent must be captured before generating notes.");
-  }
-  const transcript = await getTranscriptText(db, encounter.id);
-  if (!transcript) {
-    return jsonError(c, 400, "No transcript data available. Please record an encounter first.");
-  }
-
   try {
-    const note = await generateAndStoreNote(c.env, db, encounter, transcript);
-    await writeAudit(db, {
-      user_id: c.get("auth").user_id,
-      action: "note.generated",
-      resource_type: "note",
-      resource_id: note.id,
-      details: { template: encounter.specialty_template },
-      ip_address: clientIp(c),
+    const note = await withNeon(c.env, async (sql) => {
+      const encounter = await findEncounter(sql, c.req.param("id") ?? "", c.get("auth").user_id);
+      if (!encounter) return { error: "missing" as const };
+      if (!encounter.consent_recorded) return { error: "consent" as const };
+      const transcript = await getTranscriptText(sql, encounter.id);
+      if (!transcript) return { error: "transcript" as const };
+      const generated = await generateAndStoreNote(c.env, sql, encounter, transcript);
+      await writeAudit(sql, {
+        user_id: c.get("auth").user_id,
+        action: "note.generated",
+        resource_type: "note",
+        resource_id: generated.id,
+        details: { template: encounter.specialty_template },
+        ip_address: clientIp(c),
+      });
+      return { note: generated };
     });
-    return c.json(publicNote(note));
+    if ("error" in note) {
+      if (note.error === "missing") return jsonError(c, 404, "Encounter not found.");
+      if (note.error === "consent") {
+        return jsonError(c, 400, "Recording consent must be captured before generating notes.");
+      }
+      return jsonError(c, 400, "No transcript data available. Please record an encounter first.");
+    }
+    return c.json(publicNote(note.note));
   } catch (err) {
     console.error(JSON.stringify({ event: "note_generation_failed", error: String(err) }));
     return jsonError(c, 500, "Note generation failed.");
@@ -309,17 +304,21 @@ encounterRoutes.post("/:id/generate-note", requireRoles(["physician"]), async (c
 });
 
 encounterRoutes.get("/:id/note", async (c) => {
-  const encounter = await loadEncounter(c.env, c.req.param("id") ?? "", c.get("auth").user_id);
-  if (!encounter) return jsonError(c, 404, "Encounter not found.");
-  const db = createSupabase(c.env);
-  const { data } = await db.from("clinical_notes").select("*").eq("encounter_id", encounter.id).maybeSingle();
-  if (!data) return jsonError(c, 404, "No note found for this encounter.");
-  return c.json(publicNote(data as NoteRow));
+  const note = await withNeon(c.env, async (sql) => {
+    const encounter = await findEncounter(sql, c.req.param("id") ?? "", c.get("auth").user_id);
+    if (!encounter) return { error: "missing" as const };
+    const data = await getNoteByEncounter(sql, encounter.id);
+    if (!data) return { error: "note" as const };
+    return { note: data };
+  });
+  if ("error" in note) {
+    if (note.error === "missing") return jsonError(c, 404, "Encounter not found.");
+    return jsonError(c, 404, "No note found for this encounter.");
+  }
+  return c.json(publicNote(note.note));
 });
 
 encounterRoutes.patch("/:id/note", requireRoles(["physician"]), async (c) => {
-  const encounter = await loadEncounter(c.env, c.req.param("id") ?? "", c.get("auth").user_id);
-  if (!encounter) return jsonError(c, 404, "Encounter not found.");
   const body = (await c.req.json<{
     section?: string;
     content?: string;
@@ -332,71 +331,79 @@ encounterRoutes.patch("/:id/note", requireRoles(["physician"]), async (c) => {
     sections?: Record<string, unknown>;
   };
 
-  const db = createSupabase(c.env);
-  const { data: note } = await db.from("clinical_notes").select("*").eq("encounter_id", encounter.id).maybeSingle();
-  if (!note) return jsonError(c, 404, "No note found.");
-  if (note.status === "locked") return jsonError(c, 400, "This note is locked. Create an addendum instead.");
+  const result = await withNeon(c.env, async (sql) => {
+    const encounter = await findEncounter(sql, c.req.param("id") ?? "", c.get("auth").user_id);
+    if (!encounter) return { error: "missing" as const };
+    const note = await getNoteByEncounter(sql, encounter.id);
+    if (!note) return { error: "note" as const };
+    if (note.status === "locked") return { error: "locked" as const };
 
-  const updates: Record<string, unknown> = {};
-  if (body.sections && typeof body.sections === "object") {
-    for (const [section, raw] of Object.entries(body.sections)) {
-      if (!EDITABLE_SECTIONS.has(section)) continue;
-      if ((NOTE_JSON_FIELDS as readonly string[]).includes(section)) {
-        if (typeof raw === "string") {
-          try {
-            updates[section] = JSON.parse(raw);
-          } catch {
-            return jsonError(c, 400, `Section ${section} must be valid JSON.`);
+    const updates: Record<string, unknown> = {};
+    if (body.sections && typeof body.sections === "object") {
+      for (const [section, raw] of Object.entries(body.sections)) {
+        if (!EDITABLE_SECTIONS.has(section)) continue;
+        if ((NOTE_JSON_FIELDS as readonly string[]).includes(section)) {
+          if (typeof raw === "string") {
+            try {
+              updates[section] = JSON.parse(raw);
+            } catch {
+              return { error: "json" as const, section };
+            }
+          } else {
+            updates[section] = raw;
           }
         } else {
-          updates[section] = raw;
+          updates[section] = raw ?? "";
         }
-      } else {
-        updates[section] = raw ?? "";
       }
-    }
-  } else {
-    if (!body.section || !EDITABLE_SECTIONS.has(body.section)) {
-      return jsonError(c, 400, "Invalid section.");
-    }
-    let content: unknown = body.content ?? "";
-    if ((NOTE_JSON_FIELDS as readonly string[]).includes(body.section)) {
-      try {
-        content = typeof body.content === "string" ? JSON.parse(body.content) : body.content;
-      } catch {
-        return jsonError(c, 400, "Section content must be valid JSON.");
+    } else {
+      if (!body.section || !EDITABLE_SECTIONS.has(body.section)) return { error: "section" as const };
+      let content: unknown = body.content ?? "";
+      if ((NOTE_JSON_FIELDS as readonly string[]).includes(body.section)) {
+        try {
+          content = typeof body.content === "string" ? JSON.parse(body.content) : body.content;
+        } catch {
+          return { error: "json" as const, section: body.section };
+        }
       }
+      updates[body.section] = content;
     }
-    updates[body.section] = content;
+
+    if (Object.keys(updates).length === 0) return { error: "empty" as const };
+
+    await insertNoteVersion(sql, {
+      note_id: note.id,
+      version_number: note.current_version,
+      content_snapshot: noteSnapshot(note),
+      change_description: body.change_description ?? "Manual edit",
+      edited_by: c.get("auth").user_id,
+    });
+    const updated = await updateClinicalNote(sql, note.id, {
+      ...updates,
+      current_version: note.current_version + 1,
+    });
+    if (!updated) return { error: "save" as const };
+    await writeAudit(sql, {
+      user_id: c.get("auth").user_id,
+      action: "note.edited",
+      resource_type: "note",
+      resource_id: note.id,
+      details: { sections: Object.keys(updates), version: note.current_version + 1 },
+      ip_address: clientIp(c),
+    });
+    return { note: updated };
+  });
+
+  if ("error" in result) {
+    if (result.error === "missing") return jsonError(c, 404, "Encounter not found.");
+    if (result.error === "note") return jsonError(c, 404, "No note found.");
+    if (result.error === "locked") return jsonError(c, 400, "This note is locked. Create an addendum instead.");
+    if (result.error === "json") return jsonError(c, 400, `Section ${result.section} must be valid JSON.`);
+    if (result.error === "section") return jsonError(c, 400, "Invalid section.");
+    if (result.error === "empty") return jsonError(c, 400, "No editable fields were provided.");
+    return jsonError(c, 500, "Could not edit note.");
   }
-
-  if (Object.keys(updates).length === 0) return jsonError(c, 400, "No editable fields were provided.");
-
-  await db.from("note_versions").insert({
-    note_id: note.id,
-    version_number: note.current_version,
-    content_snapshot: noteSnapshot(note as NoteRow),
-    change_description: body.change_description ?? "Manual edit",
-    edited_by: c.get("auth").user_id,
-  });
-
-  const { data: updated, error } = await db
-    .from("clinical_notes")
-    .update({ ...updates, current_version: note.current_version + 1 })
-    .eq("id", note.id)
-    .select("*")
-    .single();
-  if (error || !updated) return jsonError(c, 500, "Could not edit note.");
-
-  await writeAudit(db, {
-    user_id: c.get("auth").user_id,
-    action: "note.edited",
-    resource_type: "note",
-    resource_id: note.id,
-    details: { sections: Object.keys(updates), version: note.current_version + 1 },
-    ip_address: clientIp(c),
-  });
-  return c.json(publicNote(updated as NoteRow));
+  return c.json(publicNote(result.note));
 });
 
 encounterRoutes.post("/:id/sign-off", requireRoles(["physician"]), async (c) => {
@@ -406,56 +413,72 @@ encounterRoutes.post("/:id/sign-off", requireRoles(["physician"]), async (c) => 
   if (!body.confirmation) {
     return jsonError(c, 400, "Sign-off requires explicit confirmation (confirmation=true).");
   }
-  const encounter = await loadEncounter(c.env, c.req.param("id") ?? "", c.get("auth").user_id);
-  if (!encounter) return jsonError(c, 404, "Encounter not found.");
-  const db = createSupabase(c.env);
-  const { data: note } = await db.from("clinical_notes").select("*").eq("encounter_id", encounter.id).maybeSingle();
-  if (!note) return jsonError(c, 404, "No note found.");
-  if (note.status === "locked") return jsonError(c, 400, "Note is already signed and locked.");
-
   const now = new Date().toISOString();
-  await db.from("note_versions").insert({
-    note_id: note.id,
-    version_number: note.current_version,
-    content_snapshot: noteSnapshot(note as NoteRow),
-    change_description: "Physician sign-off — note locked",
-    edited_by: c.get("auth").user_id,
+  const result = await withNeon(c.env, async (sql) => {
+    const encounter = await findEncounter(sql, c.req.param("id") ?? "", c.get("auth").user_id);
+    if (!encounter) return { error: "missing" as const };
+    const note = await getNoteByEncounter(sql, encounter.id);
+    if (!note) return { error: "note" as const };
+    if (note.status === "locked") return { error: "locked" as const };
+    await insertNoteVersion(sql, {
+      note_id: note.id,
+      version_number: note.current_version,
+      content_snapshot: noteSnapshot(note),
+      change_description: "Physician sign-off — note locked",
+      edited_by: c.get("auth").user_id,
+    });
+    await updateClinicalNote(sql, note.id, {
+      status: "locked",
+      signed_off_at: now,
+      signed_off_by: c.get("auth").user_id,
+    });
+    await updateEncounter(sql, encounter.id, { status: "signed_off", signed_off_at: now });
+    await writeAudit(sql, {
+      user_id: c.get("auth").user_id,
+      action: "note.signed_off",
+      resource_type: "note",
+      resource_id: note.id,
+      details: { note_status: "locked" },
+      ip_address: clientIp(c),
+    });
+    return { ok: true as const };
   });
-  await db
-    .from("clinical_notes")
-    .update({ status: "locked", signed_off_at: now, signed_off_by: c.get("auth").user_id })
-    .eq("id", note.id);
-  await db
-    .from("encounters")
-    .update({ status: "signed_off", signed_off_at: now, updated_at: now })
-    .eq("id", encounter.id);
-  await writeAudit(db, {
-    user_id: c.get("auth").user_id,
-    action: "note.signed_off",
-    resource_type: "note",
-    resource_id: note.id,
-    details: { note_status: "locked" },
-    ip_address: clientIp(c),
-  });
+  if ("error" in result) {
+    if (result.error === "missing") return jsonError(c, 404, "Encounter not found.");
+    if (result.error === "note") return jsonError(c, 404, "No note found.");
+    return jsonError(c, 400, "Note is already signed and locked.");
+  }
   return c.json({ status: "signed_off", signed_off_at: now });
 });
 
 encounterRoutes.get("/:id/export/pdf", requireRoles(["physician", "admin"]), async (c) => {
-  const encounter = await loadEncounter(c.env, c.req.param("id") ?? "", c.get("auth").user_id);
-  if (!encounter) return jsonError(c, 404, "Encounter not found.");
-  const db = createSupabase(c.env);
-  const { data: note } = await db.from("clinical_notes").select("*").eq("encounter_id", encounter.id).maybeSingle();
-  if (!note) return jsonError(c, 404, "No note found.");
+  const payload = await withNeon(c.env, async (sql) => {
+    const encounter = await findEncounter(sql, c.req.param("id") ?? "", c.get("auth").user_id);
+    if (!encounter) return null;
+    const note = await getNoteByEncounter(sql, encounter.id);
+    if (!note) return { encounter, note: null };
+    await writeAudit(sql, {
+      user_id: c.get("auth").user_id,
+      action: "pdf.exported",
+      resource_type: "note",
+      resource_id: note.id,
+      details: { export_format: "pdf" },
+      ip_address: clientIp(c),
+    });
+    return { encounter, note };
+  });
+  if (!payload) return jsonError(c, 404, "Encounter not found.");
+  if (!payload.note) return jsonError(c, 404, "No note found.");
 
   const user = c.get("auth").user;
-  const patientName = await decryptText(c.env.SECRET_KEY, encounter.patient_name);
+  const patientName = await decryptText(c.env.SECRET_KEY, payload.encounter.patient_name);
   const pdf = await generateClinicalPdf({
-    note: note as unknown as Record<string, unknown>,
+    note: payload.note as unknown as Record<string, unknown>,
     encounter: {
-      encounter_id: encounter.encounter_id,
-      date: encounter.created_at.slice(0, 10),
-      specialty_template: encounter.specialty_template,
-      duration_seconds: encounter.duration_seconds,
+      encounter_id: payload.encounter.encounter_id,
+      date: payload.encounter.created_at.slice(0, 10),
+      specialty_template: payload.encounter.specialty_template,
+      duration_seconds: payload.encounter.duration_seconds,
     },
     physician: {
       full_name: user.full_name,
@@ -466,16 +489,7 @@ encounterRoutes.get("/:id/export/pdf", requireRoles(["physician", "admin"]), asy
     patientLabel: patientName ? "On file (encrypted at rest)" : "Not recorded",
   });
 
-  await writeAudit(db, {
-    user_id: c.get("auth").user_id,
-    action: "pdf.exported",
-    resource_type: "note",
-    resource_id: note.id,
-    details: { export_format: "pdf" },
-    ip_address: clientIp(c),
-  });
-
-  const filename = `MedScribe_${encounter.encounter_id}_${encounter.created_at.slice(0, 10).replace(/-/g, "")}.pdf`;
+  const filename = `MedScribe_${payload.encounter.encounter_id}_${payload.encounter.created_at.slice(0, 10).replace(/-/g, "")}.pdf`;
   return new Response(pdf, {
     headers: {
       "Content-Type": "application/pdf",
@@ -485,18 +499,18 @@ encounterRoutes.get("/:id/export/pdf", requireRoles(["physician", "admin"]), asy
 });
 
 encounterRoutes.get("/:id/note/versions", async (c) => {
-  const encounter = await loadEncounter(c.env, c.req.param("id") ?? "", c.get("auth").user_id);
-  if (!encounter) return jsonError(c, 404, "Encounter not found.");
-  const db = createSupabase(c.env);
-  const { data: note } = await db.from("clinical_notes").select("*").eq("encounter_id", encounter.id).maybeSingle();
-  if (!note) return jsonError(c, 404, "No note found.");
-  const { data: versions } = await db
-    .from("note_versions")
-    .select("version_number, change_description, edited_by, created_at")
-    .eq("note_id", note.id)
-    .order("version_number", { ascending: false });
+  const payload = await withNeon(c.env, async (sql) => {
+    const encounter = await findEncounter(sql, c.req.param("id") ?? "", c.get("auth").user_id);
+    if (!encounter) return null;
+    const note = await getNoteByEncounter(sql, encounter.id);
+    if (!note) return { note: null, versions: [] };
+    const versions = await listNoteVersions(sql, note.id);
+    return { note, versions };
+  });
+  if (!payload) return jsonError(c, 404, "Encounter not found.");
+  if (!payload.note) return jsonError(c, 404, "No note found.");
   return c.json({
-    current_version: note.current_version,
-    versions: versions ?? [],
+    current_version: payload.note.current_version,
+    versions: payload.versions,
   });
 });

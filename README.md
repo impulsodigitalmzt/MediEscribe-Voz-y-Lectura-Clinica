@@ -30,7 +30,7 @@ MedScribe listens to doctor–patient conversations in real time, extracts clini
 └─────────────┬───────────────────────────┬───────────────┘
               │                           │
               ▼                           ▼
-        Supabase (Postgres)         Groq + Meta Graph
+        Neon (PostgreSQL)           Groq + Meta Graph
 ```
 
 ## Quick Start
@@ -43,7 +43,7 @@ npx wrangler types
 npm run dev                      # http://localhost:8787
 ```
 
-See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for Supabase schema, secrets, and the Meta webhook.
+See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for the Neon schema, secrets, and the Meta webhook.
 
 ## Tech Stack
 
@@ -56,7 +56,7 @@ See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for Supabase schema, secrets, and t
 | Audio      | Web Speech API + Worker WebSocket                  |
 | PDF Export | pdf-lib (Edge-compatible)                          |
 | Auth       | JWT (jose) + PBKDF2 (Web Crypto)                   |
-| Database   | Neon HTTP (`@neondatabase/serverless`) + Supabase  |
+| Database   | Neon PostgreSQL (`@neondatabase/serverless` HTTP)  |
 
 ## Security
 

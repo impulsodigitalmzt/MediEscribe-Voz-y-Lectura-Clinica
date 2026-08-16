@@ -9,16 +9,15 @@ The Python FastAPI backend in `backend/` is legacy and is not deployed.
 
 - Node.js 20+
 - A Cloudflare account (`npx wrangler login`)
-- A Supabase project (schema in `supabase/schema.sql`)
+- A Neon PostgreSQL database (schema in `db/schema.sql`; also applied by the Worker on start)
 - A Groq API key
 - WhatsApp Cloud API credentials (Meta)
 
 ## 1. Database
 
-In the Supabase SQL Editor, run `supabase/schema.sql`.
+In the Neon SQL Editor, run `db/schema.sql` (or let the Worker create tables on first request).
 
-Confirm Row Level Security is enabled. The Worker uses the **service role** key
-and bypasses RLS; anon/authenticated clients cannot read clinical tables.
+The Worker talks to Neon over HTTP with `@neondatabase/serverless`. Do not use Node `net`/`tls` drivers.
 
 ## 2. Local development
 
@@ -42,8 +41,6 @@ injects them as `env` bindings (`c.env.DATABASE_URL`, etc.):
 ```bash
 npx wrangler secret put DATABASE_URL
 npx wrangler secret put SECRET_KEY
-npx wrangler secret put SUPABASE_URL
-npx wrangler secret put SUPABASE_SERVICE_ROLE_KEY
 npx wrangler secret put GROQ_API_KEY
 npx wrangler secret put WHATSAPP_TOKEN
 npx wrangler secret put VERIFY_TOKEN
@@ -104,7 +101,7 @@ The Worker answers Meta's GET challenge and processes POST events with
 - [ ] All secrets set via `wrangler secret put`, not committed
 - [ ] Rotate any keys that were previously stored in `.env.example`
 - [ ] `WHATSAPP_APP_SECRET` set so `X-Hub-Signature-256` is verified
-- [ ] Supabase schema applied; service role key never exposed to the browser
+- [ ] Neon `DATABASE_URL` set; schema in `db/schema.sql` (Worker also applies it on start)
 - [ ] Custom domain + HTTPS (Workers provide TLS by default)
 - [ ] Physicians link their WhatsApp number in Settings (digits only, country code)
 

@@ -1,7 +1,8 @@
 import type { Context, Next } from "hono";
-import { createSupabase, type UserRow } from "./supabase";
+import { findUserById, withNeon } from "./neon-store";
 import { validateToken } from "./security";
 import { jsonError } from "./http";
+import type { UserRow } from "./models";
 
 export type AuthContext = {
   user_id: string;
@@ -19,16 +20,15 @@ export async function requireAuth(c: Context<{ Bindings: Env; Variables: { auth:
 
   try {
     const payload = await validateToken(c.env, token, "access");
-    const db = createSupabase(c.env);
-    const { data: user, error } = await db.from("users").select("*").eq("id", payload.sub).maybeSingle();
-    if (error || !user || !user.is_active) {
+    const user = await withNeon(c.env, (sql) => findUserById(sql, payload.sub));
+    if (!user || !user.is_active) {
       return jsonError(c, 401, "User account not found or deactivated.");
     }
     c.set("auth", {
       user_id: payload.sub,
       role: payload.role ?? user.role,
       name: String(payload.name ?? user.full_name),
-      user: user as UserRow,
+      user,
     });
     await next();
   } catch {

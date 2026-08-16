@@ -14,8 +14,6 @@
 #
 #   npx wrangler secret put DATABASE_URL
 #   npx wrangler secret put SECRET_KEY
-#   npx wrangler secret put SUPABASE_URL
-#   npx wrangler secret put SUPABASE_SERVICE_ROLE_KEY
 #   npx wrangler secret put GROQ_API_KEY
 #   npx wrangler secret put WHATSAPP_TOKEN
 #   npx wrangler secret put VERIFY_TOKEN

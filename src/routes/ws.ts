@@ -1,6 +1,5 @@
-import { createSupabase, type EncounterRow } from "../lib/supabase";
+import { findEncounter, storeTranscript, updateEncounter, withNeon } from "../lib/neon-store";
 import { validateToken } from "../lib/security";
-import { storeTranscript } from "../lib/notes";
 
 export async function handleAudioWebSocket(
   request: Request,
@@ -23,15 +22,8 @@ export async function handleAudioWebSocket(
   }
 
   const encounterId = decodeURIComponent(match[1]);
-  const db = createSupabase(env);
-  const { data } = await db
-    .from("encounters")
-    .select("*")
-    .or(`id.eq.${encounterId},encounter_id.eq.${encounterId}`)
-    .eq("physician_id", userId)
-    .maybeSingle();
-  if (!data) return new Response("Encounter not found", { status: 404 });
-  const encounter = data as EncounterRow;
+  const encounter = await withNeon(env, (sql) => findEncounter(sql, encounterId, userId));
+  if (!encounter) return new Response("Encounter not found", { status: 404 });
 
   const pair = new WebSocketPair();
   const client = pair[0];
@@ -60,14 +52,15 @@ export async function handleAudioWebSocket(
         const text = (msg.text ?? "").trim();
         if (!text) return;
         try {
-          const inner = createSupabase(env);
-          await storeTranscript(
-            inner,
-            encounter.id,
-            text,
-            msg.speaker ?? "physician",
-            msg.language ?? encounter.spoken_language,
-            Number(msg.confidence ?? 1)
+          await withNeon(env, (sql) =>
+            storeTranscript(
+              sql,
+              encounter.id,
+              text,
+              msg.speaker ?? "physician",
+              msg.language ?? encounter.spoken_language,
+              Number(msg.confidence ?? 1)
+            )
           );
           segments += 1;
           server.send(JSON.stringify({ type: "ack", sequence: segments, text }));
@@ -89,13 +82,11 @@ export async function handleAudioWebSocket(
 
   server.addEventListener("close", () => {
     const elapsed = Math.max(0, Math.round((Date.now() - started) / 1000));
-    void createSupabase(env)
-      .from("encounters")
-      .update({
+    void withNeon(env, (sql) =>
+      updateEncounter(sql, encounter.id, {
         duration_seconds: Math.max(encounter.duration_seconds ?? 0, elapsed),
-        updated_at: new Date().toISOString(),
       })
-      .eq("id", encounter.id);
+    );
   });
 
   return new Response(null, { status: 101, webSocket: client });

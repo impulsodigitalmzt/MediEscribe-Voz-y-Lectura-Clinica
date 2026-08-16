@@ -14,8 +14,6 @@ interface __BaseEnv_Env {
 	RATE_LIMIT_AUTH_WINDOW_MINUTES: "15";
 	WHATSAPP_GRAPH_VERSION: "v21.0";
 	SECRET_KEY: string;
-	SUPABASE_URL: string;
-	SUPABASE_SERVICE_ROLE_KEY: string;
 	GROQ_API_KEY: string;
 	WHATSAPP_TOKEN: string;
 	VERIFY_TOKEN: string;
@@ -35,7 +33,7 @@ type StringifyValues<EnvType extends Record<string, unknown>> = {
 	[Binding in keyof EnvType]: EnvType[Binding] extends string ? EnvType[Binding] : string;
 };
 declare namespace NodeJS {
-	interface ProcessEnv extends StringifyValues<Pick<Cloudflare.Env, "APP_NAME" | "APP_VERSION" | "ENVIRONMENT" | "JWT_ACCESS_TOKEN_EXPIRE_MINUTES" | "JWT_REFRESH_TOKEN_EXPIRE_DAYS" | "PHONE_NUMBER_ID" | "RATE_LIMIT_AUTH_ATTEMPTS" | "RATE_LIMIT_AUTH_WINDOW_MINUTES" | "WHATSAPP_GRAPH_VERSION" | "SECRET_KEY" | "SUPABASE_URL" | "SUPABASE_SERVICE_ROLE_KEY" | "GROQ_API_KEY" | "WHATSAPP_TOKEN" | "VERIFY_TOKEN" | "GROQ_MODEL" | "GROQ_WHISPER_MODEL" | "WHATSAPP_APP_SECRET" | "DATABASE_URL">> {}
+	interface ProcessEnv extends StringifyValues<Pick<Cloudflare.Env, "APP_NAME" | "APP_VERSION" | "ENVIRONMENT" | "JWT_ACCESS_TOKEN_EXPIRE_MINUTES" | "JWT_REFRESH_TOKEN_EXPIRE_DAYS" | "PHONE_NUMBER_ID" | "RATE_LIMIT_AUTH_ATTEMPTS" | "RATE_LIMIT_AUTH_WINDOW_MINUTES" | "WHATSAPP_GRAPH_VERSION" | "SECRET_KEY" | "GROQ_API_KEY" | "WHATSAPP_TOKEN" | "VERIFY_TOKEN" | "GROQ_MODEL" | "GROQ_WHISPER_MODEL" | "WHATSAPP_APP_SECRET" | "DATABASE_URL">> {}
 }
 
 // Begin runtime types

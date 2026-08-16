@@ -1,5 +1,3 @@
-import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-
 export type UserRow = {
   id: string;
   email: string;
@@ -92,42 +90,6 @@ export type NoteRow = {
   signed_off_at: string | null;
   signed_off_by: string | null;
 };
-
-export function createSupabase(env: Env): SupabaseClient {
-  if (!env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) {
-    throw new Error("Supabase environment variables are not configured");
-  }
-  return createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, {
-    auth: { persistSession: false, autoRefreshToken: false },
-    global: { fetch },
-  });
-}
-
-export async function writeAudit(
-  db: SupabaseClient,
-  entry: {
-    user_id?: string | null;
-    action: string;
-    resource_type: string;
-    resource_id?: string | null;
-    details?: Record<string, unknown>;
-    ip_address?: string;
-    user_agent?: string;
-  }
-): Promise<void> {
-  const { error } = await db.from("audit_logs").insert({
-    user_id: entry.user_id ?? null,
-    action: entry.action,
-    resource_type: entry.resource_type,
-    resource_id: entry.resource_id ?? null,
-    details: entry.details ?? {},
-    ip_address: entry.ip_address ?? "",
-    user_agent: entry.user_agent ?? "",
-  });
-  if (error) {
-    console.error(JSON.stringify({ event: "audit_write_failed", error: error.message }));
-  }
-}
 
 export function publicUser(user: UserRow) {
   return {

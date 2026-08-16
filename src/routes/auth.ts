@@ -1,5 +1,13 @@
 import { Hono } from "hono";
-import { createSupabase, publicUser, writeAudit, type UserRow } from "../lib/supabase";
+import { publicUser, type UserRow } from "../lib/models";
+import {
+  findUserByEmail,
+  findUserById,
+  insertUser,
+  updateUser,
+  withNeon,
+  writeAudit,
+} from "../lib/neon-store";
 import {
   createAccessToken,
   createRefreshToken,
@@ -41,51 +49,44 @@ async function rateLimitAuth(env: Env, key: string): Promise<boolean> {
   return true;
 }
 
-/** Cuenta de pruebas (misma que el formulario de login). Se crea o repara al entrar. */
 const DEMO_EMAIL = "doctor@hospital.com";
 const DEMO_PASSWORD = "SecurePass123!";
 
 async function ensureDemoPhysician(env: Env, email: string, password: string): Promise<void> {
   if (email !== DEMO_EMAIL || password !== DEMO_PASSWORD) return;
 
-  const db = createSupabase(env);
-  const { data: existing } = await db.from("users").select("id").eq("email", DEMO_EMAIL).maybeSingle();
-  const passwordHash = await hashPassword(DEMO_PASSWORD);
-
-  if (!existing) {
-    const { error } = await db.from("users").insert({
-      email: DEMO_EMAIL,
+  await withNeon(env, async (sql) => {
+    const existing = await findUserByEmail(sql, DEMO_EMAIL);
+    const passwordHash = await hashPassword(DEMO_PASSWORD);
+    if (!existing) {
+      await insertUser(sql, {
+        email: DEMO_EMAIL,
+        password_hash: passwordHash,
+        full_name: "Dr. MediEscribe Pruebas",
+        credentials: "MD",
+        specialty: "Medicina General",
+        institution: "Hospital de Pruebas",
+        role: "physician",
+        preferred_language: "es",
+        is_active: true,
+      });
+      return;
+    }
+    await updateUser(sql, existing.id, {
       password_hash: passwordHash,
-      full_name: "Dr. MediEscribe Pruebas",
-      credentials: "MD",
-      specialty: "Medicina General",
-      institution: "Hospital de Pruebas",
-      role: "physician",
-      preferred_language: "es",
       is_active: true,
       failed_login_attempts: 0,
       locked_until: null,
     });
-    if (error) {
-      console.error(JSON.stringify({ event: "demo_user_create_failed", error: error.message }));
-      throw new Error(error.message);
-    }
-    return;
-  }
-
-  const { error } = await db
-    .from("users")
-    .update({
-      password_hash: passwordHash,
-      is_active: true,
-      failed_login_attempts: 0,
-      locked_until: null,
-    })
-    .eq("id", existing.id);
-  if (error) {
-    console.error(JSON.stringify({ event: "demo_user_reset_failed", error: error.message }));
-  }
+  });
 }
+
+authRoutes.get("/ready", (c) => {
+  return c.json({
+    neon: Boolean(c.env.DATABASE_URL),
+    secret_key: Boolean(c.env.SECRET_KEY),
+  });
+});
 
 authRoutes.post("/register", async (c) => {
   const body = await c.req.json<{
@@ -99,44 +100,45 @@ authRoutes.post("/register", async (c) => {
   if (!body?.email || !body.password || !body.full_name) {
     return jsonError(c, 400, "email, password and full_name are required.");
   }
-  const strength = validatePasswordStrength(body.password);
+  const password = body.password;
+  const fullName = body.full_name.trim();
+  const strength = validatePasswordStrength(password);
   if (strength) return jsonError(c, 400, strength);
 
-  const db = createSupabase(c.env);
   const email = body.email.toLowerCase().trim();
-  const { data: existing } = await db.from("users").select("id").eq("email", email).maybeSingle();
-  if (existing) return jsonError(c, 409, "An account with this email already exists.");
-
-  const { data: user, error } = await db
-    .from("users")
-    .insert({
-      email,
-      password_hash: await hashPassword(body.password),
-      full_name: body.full_name.trim(),
-      credentials: (body.credentials ?? "").trim(),
-      specialty: (body.specialty ?? "General Practice").trim(),
-      institution: (body.institution ?? "").trim(),
-      role: "physician",
-    })
-    .select("*")
-    .single();
-
-  if (error || !user) {
-    console.error(JSON.stringify({ event: "register_failed", error: error?.message }));
+  try {
+    const user = await withNeon(c.env, async (sql) => {
+      const existing = await findUserByEmail(sql, email);
+      if (existing) return null;
+      const created = await insertUser(sql, {
+        email,
+        password_hash: await hashPassword(password),
+        full_name: fullName,
+        credentials: (body.credentials ?? "").trim(),
+        specialty: (body.specialty ?? "General Practice").trim(),
+        institution: (body.institution ?? "").trim(),
+        role: "physician",
+      });
+      await writeAudit(sql, {
+        user_id: created.id,
+        action: "user.register",
+        resource_type: "user",
+        resource_id: created.id,
+        details: { role: created.role },
+        ip_address: clientIp(c),
+        user_agent: userAgent(c),
+      });
+      return created;
+    });
+    if (!user) return jsonError(c, 409, "An account with this email already exists.");
+    return c.json(await issueTokens(c.env, user), 201);
+  } catch (error) {
+    console.error(JSON.stringify({
+      event: "register_failed",
+      error: error instanceof Error ? error.message : "unknown",
+    }));
     return jsonError(c, 500, "Registration failed.");
   }
-
-  await writeAudit(db, {
-    user_id: user.id,
-    action: "user.register",
-    resource_type: "user",
-    resource_id: user.id,
-    details: { role: user.role },
-    ip_address: clientIp(c),
-    user_agent: userAgent(c),
-  });
-
-  return c.json(await issueTokens(c.env, user as UserRow), 201);
 });
 
 authRoutes.post("/login", async (c) => {
@@ -152,11 +154,7 @@ authRoutes.post("/login", async (c) => {
   } catch (err) {
     const message = err instanceof Error ? err.message : "unknown";
     console.error(JSON.stringify({ event: "demo_login_ensure_failed", error: message }));
-    return jsonError(
-      c,
-      500,
-      "No se pudo crear la cuenta de prueba. Verifique Supabase (tabla users) y las claves del Worker."
-    );
+    return jsonError(c, 500, `No se pudo crear la cuenta de prueba: ${message}`);
   }
 
   const ip = clientIp(c);
@@ -164,58 +162,72 @@ authRoutes.post("/login", async (c) => {
     return jsonError(c, 429, "Demasiados intentos. Espere unos minutos e inténtelo de nuevo.");
   }
 
-  const db = createSupabase(c.env);
-  const { data: user } = await db.from("users").select("*").eq("email", email).maybeSingle();
+  try {
+    const tokens = await withNeon(c.env, async (sql) => {
+      const user = await findUserByEmail(sql, email);
+      if (!user) {
+        await writeAudit(sql, {
+          action: "user.login_failed",
+          resource_type: "user",
+          details: { error_type: "auth_failed" },
+          ip_address: ip,
+          user_agent: userAgent(c),
+        });
+        return { error: "invalid" as const };
+      }
 
-  if (!user) {
-    await writeAudit(db, {
-      action: "user.login_failed",
-      resource_type: "user",
-      details: { error_type: "auth_failed" },
-      ip_address: ip,
-      user_agent: userAgent(c),
+      if (!isDemoLogin && user.locked_until && new Date(user.locked_until) > new Date()) {
+        return { error: "locked" as const };
+      }
+
+      if (!isDemoLogin && !(await verifyPassword(password, user.password_hash))) {
+        const attempts = user.failed_login_attempts + 1;
+        const max = parseIntEnv(c.env.RATE_LIMIT_AUTH_ATTEMPTS, 5);
+        const windowMin = parseIntEnv(c.env.RATE_LIMIT_AUTH_WINDOW_MINUTES, 15);
+        const patch: Record<string, unknown> = { failed_login_attempts: attempts };
+        if (attempts >= max) {
+          patch.locked_until = new Date(Date.now() + windowMin * 60_000).toISOString();
+        }
+        await updateUser(sql, user.id, patch);
+        await writeAudit(sql, {
+          action: "user.login_failed",
+          resource_type: "user",
+          details: { error_type: "auth_failed" },
+          ip_address: ip,
+          user_agent: userAgent(c),
+        });
+        return { error: "invalid" as const };
+      }
+
+      if (!user.is_active) return { error: "inactive" as const };
+
+      await updateUser(sql, user.id, { failed_login_attempts: 0, locked_until: null });
+      await writeAudit(sql, {
+        user_id: user.id,
+        action: "user.login",
+        resource_type: "user",
+        resource_id: user.id,
+        details: { role: user.role },
+        ip_address: ip,
+        user_agent: userAgent(c),
+      });
+      return { user };
     });
-    return jsonError(c, 401, "Correo o contraseña incorrectos.");
-  }
 
-  const row = user as UserRow;
-  if (!isDemoLogin && row.locked_until && new Date(row.locked_until) > new Date()) {
-    return jsonError(c, 401, "Cuenta bloqueada temporalmente por varios intentos fallidos. Inténtelo más tarde.");
-  }
-
-  if (!isDemoLogin && !(await verifyPassword(password, row.password_hash))) {
-    const attempts = row.failed_login_attempts + 1;
-    const max = parseIntEnv(c.env.RATE_LIMIT_AUTH_ATTEMPTS, 5);
-    const windowMin = parseIntEnv(c.env.RATE_LIMIT_AUTH_WINDOW_MINUTES, 15);
-    const patch: Record<string, unknown> = { failed_login_attempts: attempts };
-    if (attempts >= max) {
-      patch.locked_until = new Date(Date.now() + windowMin * 60_000).toISOString();
+    if ("error" in tokens) {
+      if (tokens.error === "locked") {
+        return jsonError(c, 401, "Cuenta bloqueada temporalmente por varios intentos fallidos. Inténtelo más tarde.");
+      }
+      if (tokens.error === "inactive") return jsonError(c, 401, "Esta cuenta está desactivada.");
+      return jsonError(c, 401, "Correo o contraseña incorrectos.");
     }
-    await db.from("users").update(patch).eq("id", row.id);
-    await writeAudit(db, {
-      action: "user.login_failed",
-      resource_type: "user",
-      details: { error_type: "auth_failed" },
-      ip_address: ip,
-      user_agent: userAgent(c),
-    });
-    return jsonError(c, 401, "Correo o contraseña incorrectos.");
+
+    return c.json(await issueTokens(c.env, tokens.user));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "unknown";
+    console.error(JSON.stringify({ event: "login_failed", error: message }));
+    return jsonError(c, 500, `No se pudo iniciar sesión: ${message}`);
   }
-
-  if (!row.is_active) return jsonError(c, 401, "Esta cuenta está desactivada.");
-
-  await db.from("users").update({ failed_login_attempts: 0, locked_until: null }).eq("id", row.id);
-  await writeAudit(db, {
-    user_id: row.id,
-    action: "user.login",
-    resource_type: "user",
-    resource_id: row.id,
-    details: { role: row.role },
-    ip_address: ip,
-    user_agent: userAgent(c),
-  });
-
-  return c.json(await issueTokens(c.env, row));
 });
 
 authRoutes.post("/refresh", async (c) => {
@@ -224,10 +236,9 @@ authRoutes.post("/refresh", async (c) => {
 
   try {
     const payload = await validateToken(c.env, body.refresh_token, "refresh");
-    const db = createSupabase(c.env);
-    const { data: user } = await db.from("users").select("*").eq("id", payload.sub).maybeSingle();
+    const user = await withNeon(c.env, (sql) => findUserById(sql, payload.sub));
     if (!user || !user.is_active) return jsonError(c, 401, "User not found or deactivated.");
-    return c.json(await issueTokens(c.env, user as UserRow));
+    return c.json(await issueTokens(c.env, user));
   } catch {
     return jsonError(c, 401, "Invalid refresh token.");
   }
@@ -243,28 +254,26 @@ authRoutes.patch("/profile", requireAuth, async (c) => {
     "full_name", "credentials", "specialty", "institution",
     "preferred_language", "preferred_template", "whatsapp_phone",
   ] as const;
-  const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
+  const patch: Record<string, unknown> = {};
   for (const key of allowed) {
     const value = body[key];
     if (typeof value === "string") patch[key] = value.trim();
   }
 
-  const db = createSupabase(c.env);
-  const { data: user, error } = await db
-    .from("users")
-    .update(patch)
-    .eq("id", c.get("auth").user_id)
-    .select("*")
-    .single();
-  if (error || !user) return jsonError(c, 500, "Profile update failed.");
-
-  await writeAudit(db, {
-    user_id: c.get("auth").user_id,
-    action: "user.settings_updated",
-    resource_type: "user",
-    resource_id: c.get("auth").user_id,
-    ip_address: clientIp(c),
-    user_agent: userAgent(c),
+  const user = await withNeon(c.env, async (sql) => {
+    const updated = await updateUser(sql, c.get("auth").user_id, patch);
+    if (updated) {
+      await writeAudit(sql, {
+        user_id: c.get("auth").user_id,
+        action: "user.settings_updated",
+        resource_type: "user",
+        resource_id: c.get("auth").user_id,
+        ip_address: clientIp(c),
+        user_agent: userAgent(c),
+      });
+    }
+    return updated;
   });
-  return c.json(publicUser(user as UserRow));
+  if (!user) return jsonError(c, 500, "Profile update failed.");
+  return c.json(publicUser(user));
 });

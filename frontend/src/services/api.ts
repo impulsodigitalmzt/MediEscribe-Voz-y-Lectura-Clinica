@@ -26,13 +26,29 @@ function isCredentialAuthUrl(url?: string): boolean {
 }
 
 export function apiErrorMessage(err: unknown, fallback: string): string {
-  const ax = err as { response?: { data?: { detail?: unknown }; status?: number }; message?: string };
-  const detail = ax.response?.data?.detail;
-  if (typeof detail === 'string' && detail.trim()) return detail;
-  if (!ax.response) {
-    return 'No se pudo conectar con el servidor. Si está en Cloudflare, vuelva a publicar el Worker.';
+  const ax = err as {
+    response?: { data?: unknown; status?: number };
+    message?: string;
+  };
+  const data = ax.response?.data;
+  const status = ax.response?.status;
+  const detail =
+    data && typeof data === "object" && data !== null && "detail" in data
+      ? (data as { detail?: unknown }).detail
+      : undefined;
+  if (typeof detail === "string" && detail.trim()) return detail;
+  if (typeof data === "string" && data.trim()) {
+    if (data.trimStart().startsWith("<")) {
+      return `El servidor no respondió como API (HTTP ${status ?? "?"}). Vuelva a publicar el Worker.`;
+    }
+    return data.slice(0, 240);
   }
-  return fallback;
+  if (!ax.response) {
+    return ax.message && ax.message !== "Network Error"
+      ? ax.message
+      : "No se pudo conectar con el servidor. Si está en Cloudflare, vuelva a publicar el Worker.";
+  }
+  return `${fallback}${status ? ` (HTTP ${status})` : ""}`;
 }
 
 class ApiService {

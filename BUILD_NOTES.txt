@@ -1,0 +1,79 @@
+========================================
+MEDSCRIBE BUILD NOTES — v1.0.0
+Build Date: 2026-03-28
+========================================
+
+SELF-AUDIT CHECKLIST (Section 2.1)
+========================================
+
+# | Audit Gate                | Status | Notes
+--|---------------------------|--------|----------------------------------------------
+1 | Functional Completeness   | PASS   | All spec sections implemented. All screens
+  |                           |        | fully dynamic with live API data. LiveEncounter
+  |                           |        | right panel has real-time NLP preview.
+--|---------------------------|--------|----------------------------------------------
+2 | Input Validation          | PASS   | Pydantic schemas validate all API inputs.
+  |                           |        | Frontend form validation with password strength.
+  |                           |        | JSON validation on ROS/PE section edits.
+--|---------------------------|--------|----------------------------------------------
+3 | Security Compliance       | PASS   | No PHI in logs (PHIGuard + AuditLogger sanitizer).
+  |                           |        | HSTS + security headers on every response.
+  |                           |        | JWT 15-min access tokens with refresh rotation.
+  |                           |        | RBAC on all protected endpoints.
+  |                           |        | bcrypt password hashing. Fernet PHI encryption.
+  |                           |        | Rate limiting: 5 attempts / 15 min.
+--|---------------------------|--------|----------------------------------------------
+4 | Error Handling            | PASS   | ErrorBoundary wraps entire React app.
+  |                           |        | Global exception handler in FastAPI.
+  |                           |        | No unhandled exceptions or silent failures.
+  |                           |        | User-facing error messages on all states.
+--|---------------------------|--------|----------------------------------------------
+5 | AI Output Safety          | PASS   | NotePolisher system prompt enforces:
+  |                           |        |   - No hallucination
+  |                           |        |   - No diagnostic overreach
+  |                           |        |   - Preserve uncertainty
+  |                           |        | SafetyValidator checks every generated note.
+  |                           |        | AI disclaimer on every note and PDF.
+  |                           |        | Missing sections flagged visually.
+--|---------------------------|--------|----------------------------------------------
+6 | Unit/Integration Tests    | PASS   | test_services.py — SecurityManager, NLP, Safety,
+  |                           |        |   Templates (30+ test cases)
+  |                           |        | test_ai_validation.py — 10 sample transcript tests
+  |                           |        | test_api.py — API endpoint integration tests
+  |                           |        | test_workflow.py — full E2E workflow test
+--|---------------------------|--------|----------------------------------------------
+7 | Accessibility & UX        | PASS   | WCAG 2.1 AA: ARIA labels, keyboard navigation,
+  |                           |        | focus rings, screen reader labels, responsive
+  |                           |        | design, mobile sidebar, proper contrast ratios.
+  |                           |        | Mic capability check with clear error message.
+--|---------------------------|--------|----------------------------------------------
+8 | Performance               | PASS   | Audio pipeline: WebSocket with 2s chunk interval.
+  |                           |        | API: FastAPI async with connection pooling.
+  |                           |        | Frontend: Vite with code splitting. Client-side
+  |                           |        | NLP for instant preview. Lazy loading on routes.
+
+========================================
+INTERNAL AUDIT FIXES APPLIED (v1.0 final)
+========================================
+- LiveEncounterScreen right panel: STATIC -> DYNAMIC (LiveNotePreview with
+  real-time client-side NLP keyword extraction from transcript segments)
+- Dashboard stats: page-local counts -> server-side filtered API calls
+- Dashboard routing: signed_off/locked/amended -> /review/ not /encounter/
+- Browser mic support check added with clear error messaging
+- App wrapped in ErrorBoundary for crash resilience
+- ReviewEditScreen: JSON validation before saving ROS/PE sections
+- WebSocket: encounter duration tracking on session end
+- TypeScript type fix: handleEditStart accepts string | Record
+
+========================================
+DELIVERY FORMAT
+========================================
+- Single self-contained ZIP file
+- Filename: medscribe-v1.0-2026-03-28.zip
+- Contains: frontend/, backend/, docs/, scripts/, .github/
+- Excludes: node_modules/, __pycache__/, .env, .db files
+- 80 source files, 0 empty directories
+
+========================================
+END OF BUILD NOTES
+========================================

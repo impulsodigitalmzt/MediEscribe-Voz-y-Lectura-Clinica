@@ -1,0 +1,45 @@
+# MedScribe — Cloudflare Workers
+# Secretos: no se declaran aquí. Local → .dev.vars | Producción → wrangler secret put
+#
+#   npx wrangler secret put DATABASE_URL
+#   npx wrangler secret put SECRET_KEY
+#   npx wrangler secret put SUPABASE_URL
+#   npx wrangler secret put SUPABASE_SERVICE_ROLE_KEY
+#   npx wrangler secret put GROQ_API_KEY
+#   npx wrangler secret put WHATSAPP_TOKEN
+#   npx wrangler secret put VERIFY_TOKEN
+#   npx wrangler secret put WHATSAPP_APP_SECRET
+
+"$schema" = "./node_modules/wrangler/config-schema.json"
+name = "medscribe"
+main = "src/index.ts"
+compatibility_date = "2026-08-16"
+compatibility_flags = ["nodejs_compat"]
+
+[assets]
+directory = "./public"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+run_worker_first = ["/api/*", "/webhook/*", "/health"]
+
+[observability]
+enabled = true
+head_sampling_rate = 1
+
+# Variables públicas inyectadas en env (c.env.APP_NAME, etc.)
+[vars]
+APP_NAME = "MedScribe"
+APP_VERSION = "2.0.0"
+ENVIRONMENT = "production"
+GROQ_MODEL = "llama-3.1-8b-instant"
+GROQ_WHISPER_MODEL = "whisper-large-v3"
+JWT_ACCESS_TOKEN_EXPIRE_MINUTES = "15"
+JWT_REFRESH_TOKEN_EXPIRE_DAYS = "7"
+PHONE_NUMBER_ID = "130281826638326"
+RATE_LIMIT_AUTH_ATTEMPTS = "5"
+RATE_LIMIT_AUTH_WINDOW_MINUTES = "15"
+WHATSAPP_GRAPH_VERSION = "v21.0"
+
+# Binding KV: Wrangler provisiona el namespace en el primer deploy si no hay id.
+[[kv_namespaces]]
+binding = "RATE_LIMIT"

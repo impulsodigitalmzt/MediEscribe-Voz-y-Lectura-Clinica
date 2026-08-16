@@ -1,4 +1,15 @@
-# MedScribe — Cloudflare Workers
+# MedScribe — Cloudflare Workers + Assets (Workers & Pages)
+# SPA: npm run build (Vite) escribe en ./public
+#
+# Dashboard Workers & Pages (integración Git):
+#   Build command:      npm run build
+#   Output directory:   public
+#   Root directory:     /
+#   Node version:       20
+#
+# No uses pages_build_output_dir: este proyecto es un Worker con assets
+# (API Hono + SPA). wrangler deploy publica ambos en el mismo origen.
+#
 # Secretos: no se declaran aquí. Local → .dev.vars | Producción → wrangler secret put
 #
 #   npx wrangler secret put DATABASE_URL

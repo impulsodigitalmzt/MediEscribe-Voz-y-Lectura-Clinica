@@ -68,19 +68,23 @@ class ApiService {
   // --- Token Management ---
 
   getAccessToken(): string | null {
-    return sessionStorage.getItem('medscribe_access_token');
+    return localStorage.getItem('medscribe_access_token') || sessionStorage.getItem('medscribe_access_token');
   }
 
   getRefreshToken(): string | null {
-    return sessionStorage.getItem('medscribe_refresh_token');
+    return localStorage.getItem('medscribe_refresh_token') || sessionStorage.getItem('medscribe_refresh_token');
   }
 
   setTokens(tokens: AuthTokens): void {
-    sessionStorage.setItem('medscribe_access_token', tokens.access_token);
-    sessionStorage.setItem('medscribe_refresh_token', tokens.refresh_token);
+    localStorage.setItem('medscribe_access_token', tokens.access_token);
+    localStorage.setItem('medscribe_refresh_token', tokens.refresh_token);
+    sessionStorage.removeItem('medscribe_access_token');
+    sessionStorage.removeItem('medscribe_refresh_token');
   }
 
   clearTokens(): void {
+    localStorage.removeItem('medscribe_access_token');
+    localStorage.removeItem('medscribe_refresh_token');
     sessionStorage.removeItem('medscribe_access_token');
     sessionStorage.removeItem('medscribe_refresh_token');
   }

@@ -56,13 +56,30 @@ Non-secret vars (`GROQ_MODEL`, `PHONE_NUMBER_ID`, etc.) live in `[vars]` inside
 Neon is queried with `@neondatabase/serverless` over HTTP (`neon()`), which is
 compatible with the Workers edge runtime. Do not use Node `net`/`tls` drivers.
 
-## 4. Deploy
+## 4. Deploy (Workers & Pages)
+
+Compile the Vite SPA into `./public` and publish the Worker (API + static assets):
 
 ```bash
+npm run build
 npm run deploy
 ```
 
-This compiles the React SPA into `./public` (the Wrangler assets folder) and deploys the Worker.
+`npm run build` installs frontend deps and runs Vite with `--outDir ../public`.
+`npm run deploy` runs that build and then `wrangler deploy`.
+
+### Cloudflare dashboard (Git)
+
+Create a **Worker** (not a static-only Pages site) so the Hono API ships with the SPA:
+
+| Setting | Value |
+|---------|--------|
+| Build command | `npm run build` |
+| Output directory | `public` |
+| Root directory | `/` |
+| Node.js version | `20` |
+
+Secrets still go in **Settings → Variables and Secrets** (or `wrangler secret put`).
 
 After the first deploy, note the URL:
 

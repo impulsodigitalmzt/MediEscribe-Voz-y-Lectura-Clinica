@@ -3,20 +3,25 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "build": "tsc && vite build --outDir ../public --emptyOutDir",
+    "build:vite": "vite build --outDir ../public --emptyOutDir",
     "preview": "vite preview",
     "lint": "eslint . --ext ts,tsx"
   },
   "dependencies": {
+    "axios": "^1.7.2",
+    "clsx": "^2.1.1",
+    "date-fns": "^3.6.0",
+    "lucide-react": "^0.383.0",
+    "medscribe": "file:..",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "react-router-dom": "^6.23.1",
-    "axios": "^1.7.2",
-    "lucide-react": "^0.383.0",
-    "clsx": "^2.1.1",
-    "date-fns": "^3.6.0"
+    "react-router-dom": "^6.23.1"
   },
   "devDependencies": {
     "@types/react": "^18.3.3",

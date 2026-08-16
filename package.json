@@ -3,11 +3,16 @@
   "version": "2.0.0",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "dev": "wrangler dev",
     "dev:frontend": "npm run dev --prefix frontend",
+    "build": "npm install --prefix frontend && npm run build --prefix frontend",
+    "build:vite": "npm run build --prefix frontend",
     "build:frontend": "npm run build --prefix frontend",
-    "deploy": "npm run build:frontend && wrangler deploy",
+    "deploy": "npm run build && wrangler deploy",
     "types": "wrangler types",
     "check": "tsc --noEmit"
   },

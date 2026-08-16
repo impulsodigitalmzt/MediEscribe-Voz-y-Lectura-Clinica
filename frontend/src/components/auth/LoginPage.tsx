@@ -2,23 +2,48 @@
  * LoginPage — Secure authentication with password strength enforcement.
  */
 
-import { useState, FormEvent } from 'react';
+import { useEffect, useState, FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../hooks/useAuth';
 import { Stethoscope, Eye, EyeOff, AlertCircle, Loader2 } from 'lucide-react';
 
+const CREDS_KEY = 'medscribe_test_login';
+const TEST_EMAIL = 'doctor@hospital.com';
+const TEST_PASSWORD = 'SecurePass123!';
+
+function loadSavedCreds(): { email: string; password: string } {
+  try {
+    const raw = localStorage.getItem(CREDS_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as { email?: string; password?: string };
+      if (parsed.email && parsed.password) {
+        return { email: parsed.email, password: parsed.password };
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  return { email: TEST_EMAIL, password: TEST_PASSWORD };
+}
+
 export default function LoginPage() {
   const { login, error, clearError, isLoading } = useAuth();
   const navigate = useNavigate();
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
+  const saved = loadSavedCreds();
+  const [email, setEmail] = useState(saved.email);
+  const [password, setPassword] = useState(saved.password);
   const [showPassword, setShowPassword] = useState(false);
+
+  useEffect(() => {
+    clearError();
+  }, [clearError]);
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     clearError();
     try {
       await login({ email, password });
+      localStorage.setItem(CREDS_KEY, JSON.stringify({ email, password }));
       navigate('/dashboard', { replace: true });
     } catch {
       // Error handled by useAuth
@@ -27,7 +52,6 @@ export default function LoginPage() {
 
   return (
     <div className="min-h-screen flex">
-      {/* Left panel — branding */}
       <div className="hidden lg:flex lg:w-1/2 bg-gradient-to-br from-teal-600 via-teal-700 to-teal-900 flex-col justify-center items-center p-12 relative overflow-hidden">
         <div className="absolute inset-0">
           <div className="absolute top-20 left-20 w-64 h-64 rounded-full bg-teal-500/20 blur-3xl" />
@@ -41,27 +65,11 @@ export default function LoginPage() {
           <p className="text-teal-200 text-lg leading-relaxed">
             Expediente clínico electrónico: identifique al paciente, documente la consulta y cierre la nota conforme a la NOM-004.
           </p>
-          <div className="mt-12 flex items-center gap-4 justify-center text-sm text-teal-300/80">
-            <span className="flex items-center gap-1.5">
-              <span className="w-1.5 h-1.5 rounded-full bg-teal-400" />
-              HIPAA Ready
-            </span>
-            <span className="flex items-center gap-1.5">
-              <span className="w-1.5 h-1.5 rounded-full bg-teal-400" />
-              AI Powered
-            </span>
-            <span className="flex items-center gap-1.5">
-              <span className="w-1.5 h-1.5 rounded-full bg-teal-400" />
-              8 Languages
-            </span>
-          </div>
         </div>
       </div>
 
-      {/* Right panel — login form */}
       <div className="flex-1 flex items-center justify-center p-8">
         <div className="w-full max-w-md">
-          {/* Mobile logo */}
           <div className="lg:hidden flex items-center gap-3 mb-10 justify-center">
             <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-teal-500 to-teal-700 flex items-center justify-center">
               <Stethoscope className="w-6 h-6 text-white" />
@@ -88,11 +96,10 @@ export default function LoginPage() {
                 id="email"
                 type="email"
                 required
-                autoComplete="email"
+                autoComplete="username"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 className="input-field"
-                placeholder="doctor@hospital.com"
               />
             </div>
 
@@ -109,13 +116,12 @@ export default function LoginPage() {
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   className="input-field pr-11"
-                  placeholder="Ingrese su contraseña"
                 />
                 <button
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}
                   className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
-                  aria-label={showPassword ? 'Hide password' : 'Show password'}
+                  aria-label={showPassword ? 'Ocultar contraseña' : 'Mostrar contraseña'}
                 >
                   {showPassword ? <EyeOff className="w-4.5 h-4.5" /> : <Eye className="w-4.5 h-4.5" />}
                 </button>
@@ -130,7 +136,7 @@ export default function LoginPage() {
               {isLoading ? (
                 <>
                   <Loader2 className="w-4 h-4 animate-spin" />
-                'Entrando...'
+                  Entrando...
                 </>
               ) : (
                 'Entrar'

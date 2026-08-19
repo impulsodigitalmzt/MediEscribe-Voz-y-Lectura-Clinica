@@ -97,21 +97,26 @@ export default function VoiceDictationPanel({
         </label>
       </div>
 
-      {capturing && (
-        <div className="rounded-xl border-2 border-red-400 bg-red-50 px-4 py-4 dark-recording-banner">
-          <div className="flex items-center gap-2 mb-3">
-            <span className="recording-dot" />
-            <p className="text-sm font-semibold text-red-700">Grabando — ondas del micrófono</p>
-            <span className="ml-auto text-xs font-medium text-red-600">Micrófono activo</span>
-          </div>
+      {capturing ? (
+        <div
+          style={{
+            border: '3px solid #f87171',
+            background: '#7f1d1d',
+            borderRadius: 12,
+            padding: 16,
+          }}
+        >
+          <p style={{ margin: '0 0 10px', color: '#fecaca', fontWeight: 700, fontSize: 14 }}>
+            Grabando — si no ve barras arriba de la pantalla, recargue con Ctrl+F5
+          </p>
           <VoiceEqualizer levels={levels} />
-          {!supported && (
-            <p className="mt-2 text-xs text-red-700">
+          {!supported ? (
+            <p style={{ margin: '10px 0 0', color: '#fecaca', fontSize: 12 }}>
               Este navegador no transcribe en vivo. Las ondas confirman el micrófono; use Chrome o Edge para dictar texto.
             </p>
-          )}
+          ) : null}
         </div>
-      )}
+      ) : null}
 
       <textarea
         value={textoCaja}

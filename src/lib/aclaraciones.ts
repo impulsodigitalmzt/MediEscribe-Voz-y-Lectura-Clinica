@@ -91,7 +91,8 @@ function selloDesdeDatos(datos: DatosMedico): {
 
 export async function listarNotasAclaracion(sql: Sql, consultaId: string): Promise<NotaAclaracionPublica[]> {
   if (!isUuid(consultaId)) return [];
-  const rows = await sql<NotaAclaracionRow[]>`
+  try {
+    const rows = await sql<NotaAclaracionRow[]>`
     SELECT id, consulta_id, paciente_id, tipo, motivo, contenido,
            medico_nombre, medico_cedula, medico_especialidad, sello_responsable,
            estado, locked_en, created_at, updated_at
@@ -99,7 +100,13 @@ export async function listarNotasAclaracion(sql: Sql, consultaId: string): Promi
     WHERE consulta_id = ${consultaId}::uuid
     ORDER BY created_at ASC
   `;
-  return rows.map(publicAclaracion);
+    return rows.map(publicAclaracion);
+  } catch (error) {
+    const code = (error as { code?: string })?.code;
+    const message = error instanceof Error ? error.message : String(error);
+    if (code === "42P01" || /notas_aclaracion[\s\S]*does not exist/i.test(message)) return [];
+    throw error;
+  }
 }
 
 export async function crearNotaAclaracion(

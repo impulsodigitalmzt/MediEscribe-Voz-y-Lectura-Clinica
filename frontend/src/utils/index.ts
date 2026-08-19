@@ -141,10 +141,10 @@ export function isRecordingSupported(): boolean {
   return typeof navigator.mediaDevices !== 'undefined' && typeof navigator.mediaDevices.getUserMedia === 'function' && typeof MediaRecorder !== 'undefined';
 }
 
-/** Fecha (YYYY-MM-DD) y hora (HH:mm) en zona America/Mexico_City. */
+/** Fecha (YYYY-MM-DD) y hora (HH:mm) en zona Pacífico: Mazatlán, Sinaloa. */
 export function stampMexicoNow(): { fecha: string; hora: string } {
   const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'America/Mexico_City',
+    timeZone: 'America/Mazatlan',
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',

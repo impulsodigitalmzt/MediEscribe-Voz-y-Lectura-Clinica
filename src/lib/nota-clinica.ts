@@ -124,7 +124,7 @@ export function nombreIdioma(code: string): string {
 function ahoraMexico(): { fecha: string; hora: string } {
   const now = new Date();
   const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "America/Mexico_City",
+    timeZone: "America/Mazatlan",
     year: "numeric",
     month: "2-digit",
     day: "2-digit",

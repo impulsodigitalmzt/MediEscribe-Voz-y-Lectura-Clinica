@@ -531,7 +531,7 @@ ${previas.length ? previas.join("\n") : "Sin consultas previas en este estableci
 
 async function siguienteNumeroExpediente(sql: Sql): Promise<string> {
   const year = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "America/Mexico_City",
+    timeZone: "America/Mazatlan",
     year: "numeric",
   }).format(new Date());
   const prefix = `EXP-${year}-`;

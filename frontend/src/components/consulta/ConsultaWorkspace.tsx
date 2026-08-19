@@ -132,29 +132,59 @@ export default function ConsultaWorkspace() {
       ...incoming,
       fecha: prevFecha || incoming.fecha,
       hora: prevHora || incoming.hora,
+      medico_nombre: user?.full_name || incoming.medico_nombre,
+      medico_cedula: user?.credentials || incoming.medico_cedula,
+      medico_especialidad: user?.specialty || incoming.medico_especialidad,
+      sello_responsable: selloDesdeSesion(
+        user?.full_name || incoming.medico_nombre,
+        user?.credentials || incoming.medico_cedula,
+        user?.specialty || incoming.medico_especialidad
+      ),
     });
   };
 
-  const handleGenerarDesdeTexto = async () => {
-    if (!id || !pacienteId || locked) return;
-    if (dictado.trim().length < 20) {
-      setError('Dicte o pegue al menos unas frases de la consulta.');
+  const handleGenerarDesdeTexto = async (textoCaja?: string) => {
+    const texto = (textoCaja ?? dictado).trim();
+    if (locked) {
+      setError('La consulta está bloqueada. Use una nota de aclaración.');
       return;
     }
+    if (!id) {
+      setError('No hay una consulta abierta.');
+      return;
+    }
+    if (texto.length < 12) {
+      setError('Dicte o pegue el contenido de la consulta en la caja de transcripción y vuelva a generar.');
+      return;
+    }
+    setDictado(texto);
     setGenerating(true);
     setError('');
+    setSavedMsg('');
     try {
+      let pid = pacienteId;
+      let especialidad = consulta?.especialidad || 'medicina_general';
+      if (!pid) {
+        try {
+          const row = await api.getConsulta(id);
+          setConsulta(row);
+          pid = row.paciente_id || row.paciente?.id || '';
+          especialidad = row.especialidad || especialidad;
+        } catch {
+          /* El backend resuelve el paciente con consulta_id. */
+        }
+      }
       const stamp = nota.fecha && nota.hora ? { fecha: nota.fecha, hora: nota.hora } : stampMexicoNow();
       if (!nota.fecha || !nota.hora) {
         setNota((n) => ({ ...n, fecha: stamp.fecha, hora: stamp.hora }));
       }
-      const result = await api.procesarConsultaTexto(dictado, pacienteId, consulta?.especialidad || 'medicina_general', extras);
-      hydrate(result.consulta);
-      aplicarNotaGenerada(result.nota, stamp.fecha, stamp.hora);
+      const result = await api.procesarConsultaTexto(texto, pid, especialidad, extras);
+      if (result.consulta) hydrate(result.consulta);
+      aplicarNotaGenerada(result.nota ?? result.consulta?.nota_estructurada ?? undefined, stamp.fecha, stamp.hora);
       if (result.receta) setReceta({ ...EMPTY_RECETA, ...result.receta, medicamentos: result.receta.medicamentos ?? [] });
-      if (result.transcripcion) setDictado(result.transcripcion);
+      setDictado(result.transcripcion || texto);
       setGuardia(result.guardia_legal);
-      setSavedMsg('Nota generada. Revise y guarde.');
+      setSavedMsg('Nota redactada a partir de la transcripción. Revise los campos NOM-004 y guarde.');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'No se pudo generar la nota.');
     } finally {
@@ -163,17 +193,41 @@ export default function ConsultaWorkspace() {
   };
 
   const handleGenerarDesdeAudio = async () => {
-    if (!id || !pacienteId || !audioFile || locked) return;
+    if (locked) {
+      setError('La consulta está bloqueada.');
+      return;
+    }
+    if (!id) {
+      setError('No hay una consulta abierta.');
+      return;
+    }
+    if (!audioFile) {
+      setError('Seleccione un archivo de audio.');
+      return;
+    }
     setGenerating(true);
     setError('');
+    setSavedMsg('');
     try {
+      let pid = pacienteId;
+      let especialidad = consulta?.especialidad || 'medicina_general';
+      if (!pid) {
+        try {
+          const row = await api.getConsulta(id);
+          setConsulta(row);
+          pid = row.paciente_id || row.paciente?.id || '';
+          especialidad = row.especialidad || especialidad;
+        } catch {
+          /* El backend resuelve el paciente con consulta_id. */
+        }
+      }
       const stamp = nota.fecha && nota.hora ? { fecha: nota.fecha, hora: nota.hora } : stampMexicoNow();
       if (!nota.fecha || !nota.hora) {
         setNota((n) => ({ ...n, fecha: stamp.fecha, hora: stamp.hora }));
       }
-      const result = await api.procesarConsultaAudio(audioFile, pacienteId, consulta?.especialidad || 'medicina_general', extras);
-      hydrate(result.consulta);
-      aplicarNotaGenerada(result.nota, stamp.fecha, stamp.hora);
+      const result = await api.procesarConsultaAudio(audioFile, pid, especialidad, extras);
+      if (result.consulta) hydrate(result.consulta);
+      aplicarNotaGenerada(result.nota ?? result.consulta?.nota_estructurada ?? undefined, stamp.fecha, stamp.hora);
       if (result.receta) setReceta({ ...EMPTY_RECETA, ...result.receta, medicamentos: result.receta.medicamentos ?? [] });
       if (result.transcripcion) setDictado(result.transcripcion);
       setGuardia(result.guardia_legal);

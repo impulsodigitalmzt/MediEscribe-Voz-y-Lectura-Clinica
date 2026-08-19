@@ -8,7 +8,7 @@ type Props = {
   audioFile: File | null;
   onAudioFile: (file: File | null) => void;
   generating: boolean;
-  onGenerateText: () => void;
+  onGenerateText: (texto: string) => void;
   onGenerateAudio: () => void;
   onRecordingStart?: () => void;
 };
@@ -23,9 +23,16 @@ export default function VoiceDictationPanel({
     onDictado(current ? `${current.trim()} ${chunk}` : chunk);
   });
 
+  const textoCaja = listening && interim ? `${dictado}${dictado ? ' ' : ''}${interim}` : dictado;
+
   const handleStart = () => {
     onRecordingStart?.();
     void start();
+  };
+
+  const handleGenerarTexto = () => {
+    if (listening) stop();
+    onGenerateText(textoCaja);
   };
 
   return (
@@ -83,19 +90,24 @@ export default function VoiceDictationPanel({
       )}
 
       <textarea
-        value={listening && interim ? `${dictado}${dictado ? ' ' : ''}${interim}` : dictado}
+        value={textoCaja}
         onChange={(e) => onDictado(e.target.value)}
         placeholder="Dictado o transcripción de la consulta..."
         className="w-full min-h-[120px] p-3 rounded-lg border border-slate-200 text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-teal-500"
       />
-      <div className="flex flex-wrap gap-2">
-        <button type="button" className="btn-secondary py-1.5 px-3 text-xs" disabled={!audioFile || generating} onClick={onGenerateAudio}>
+      <div className="flex flex-wrap gap-2 items-center">
+        <button type="button" className="btn-secondary py-2 px-4 text-sm" disabled={!audioFile || generating} onClick={onGenerateAudio}>
           {generating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Mic className="w-3.5 h-3.5" />}
           Audio → nota
         </button>
-        <button type="button" className="btn-primary py-1.5 px-3 text-xs" disabled={generating || dictado.trim().length < 20} onClick={onGenerateText}>
-          {generating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileText className="w-3.5 h-3.5" />}
-          Generar desde texto
+        <button
+          type="button"
+          className="btn-primary py-2.5 px-5 text-sm font-semibold"
+          disabled={generating}
+          onClick={handleGenerarTexto}
+        >
+          {generating ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileText className="w-4 h-4" />}
+          {generating ? 'Redactando nota…' : 'Generar desde texto'}
         </button>
       </div>
     </section>

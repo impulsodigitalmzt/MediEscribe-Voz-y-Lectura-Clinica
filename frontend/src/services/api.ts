@@ -51,6 +51,25 @@ export function apiErrorMessage(err: unknown, fallback: string): string {
   return `${fallback}${status ? ` (HTTP ${status})` : ""}`;
 }
 
+async function readApiJson<T>(response: Response, fallback: string): Promise<T> {
+  const raw = await response.text();
+  let data: T & { detail?: string; code?: string } = {} as T & { detail?: string; code?: string };
+  if (raw.trim()) {
+    try {
+      data = JSON.parse(raw) as T & { detail?: string; code?: string };
+    } catch {
+      if (raw.trimStart().startsWith('<')) {
+        throw new Error(`El servidor no respondió como API (HTTP ${response.status}). Vuelva a publicar el Worker.`);
+      }
+      throw new Error(raw.slice(0, 240) || fallback);
+    }
+  }
+  if (!response.ok) {
+    throw new Error(data.detail || fallback);
+  }
+  return data;
+}
+
 class ApiService {
   private client: AxiosInstance;
   private refreshPromise: Promise<string> | null = null;
@@ -298,11 +317,7 @@ class ApiService {
         consulta_id: extras.consultaId,
       }),
     });
-    const data = (await response.json()) as ConsultaProcessResponse & { detail?: string };
-    if (!response.ok) {
-      throw new Error(data.detail || 'No se pudo procesar la consulta médica.');
-    }
-    return data;
+    return readApiJson<ConsultaProcessResponse>(response, 'No se pudo procesar la consulta médica.');
   }
 
   async getConsulta(id: string): Promise<ConsultaMedica> {

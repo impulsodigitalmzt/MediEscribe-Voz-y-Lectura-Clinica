@@ -378,7 +378,13 @@ export async function procesarConsultaDesdeTexto(
   if (!transcripcion) {
     throw new AppError(400, "La transcripción no puede estar vacía.", "TRANSCRIPT_EMPTY");
   }
-  if (!isUuid(input.pacienteId)) {
+
+  let pacienteId = (input.pacienteId ?? "").trim();
+  if (!isUuid(pacienteId) && input.consultaId) {
+    const existente = await withSql(env, ctx, (sql) => getConsultaById(sql, input.consultaId as string));
+    if (existente) pacienteId = String(existente.paciente_id);
+  }
+  if (!isUuid(pacienteId)) {
     throw new AppError(
       400,
       "Identifica al paciente en el expediente maestro antes de registrar la consulta.",
@@ -387,8 +393,8 @@ export async function procesarConsultaDesdeTexto(
   }
 
   const { paciente, historial } = await withSql(env, ctx, async (sql) => {
-    const found = await exigirPaciente(sql, input.pacienteId);
-    const previas = await listHistorialPaciente(sql, input.pacienteId);
+    const found = await exigirPaciente(sql, pacienteId);
+    const previas = await listHistorialPaciente(sql, pacienteId);
     return { paciente: found, historial: previas };
   });
 

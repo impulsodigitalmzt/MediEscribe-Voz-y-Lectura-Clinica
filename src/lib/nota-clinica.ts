@@ -151,78 +151,72 @@ function normalizarComparacion(value: string): string {
 function esCopiaDeTranscripcion(campo: string, transcripcion: string): boolean {
   const a = normalizarComparacion(campo);
   const b = normalizarComparacion(transcripcion);
+  if (!a || a === normalizarComparacion(NO_MENCIONADO)) return false;
+  if (transcripcion.trim().length > 80 && campo.trim().length >= transcripcion.trim().length * 0.5) {
+    return true;
+  }
   if (a.length < 48 || b.length < 48) return false;
   if (a === b) return true;
   const shorter = a.length <= b.length ? a : b;
   const longer = a.length <= b.length ? b : a;
-  return longer.includes(shorter) && shorter.length / longer.length >= 0.72;
+  return longer.includes(shorter) && shorter.length / longer.length >= 0.55;
 }
 
-function oracionesClinicas(texto: string): string[] {
-  return texto
-    .split(/(?<=[.!?…;:])\s+|\n+/)
-    .map((item) => item.trim())
-    .filter((item) => item.length > 8);
-}
-
-function juntarOraciones(items: string[], max = 4): string {
-  const unique: string[] = [];
-  for (const item of items) {
-    if (!unique.includes(item)) unique.push(item);
+function recortarFragmento(fragmento: string, transcripcion: string, maxRatio = 0.45): string {
+  const value = fragmento.replace(/\s+/g, " ").trim();
+  if (!value) return "";
+  if (value.length >= transcripcion.trim().length * maxRatio) {
+    return value.slice(0, Math.min(220, Math.floor(transcripcion.length * 0.32))).trim();
   }
-  return unique.slice(0, max).join(" ").trim();
-}
-
-function tomarOraciones(oraciones: string[], patron: RegExp): string[] {
-  return oraciones.filter((item) => patron.test(item));
+  return value;
 }
 
 function extraerSeccionesNom004(transcripcion: string): Partial<NotaClinica> {
-  const ss = oracionesClinicas(transcripcion);
-  const motivoHits = tomarOraciones(
-    ss,
-    /motivo|viene por|consulta por|acude por|me duele|dolor de|qu[eé] le trae|aqu[ií] por|cefalea|tos|fiebre/i
-  );
-  const padecimientoHits = tomarOraciones(
-    ss,
-    /desde hace|hace \d|inici[oó]|comenz[oó]|evoluci[oó]n|se acompa[nñ]a|empeor|mejor[oó]|intensidad|nause|diarrea|padecimiento|s[ií]ntoma/i
-  );
-  const exploracionHits = tomarOraciones(
-    ss,
-    /exploraci[oó]n|signos vitales|\bta\b|\bfc\b|\bfr\b|temperatura|abdomen|pulm[oó]n|auscult|palpaci|blando|tenso|ruidos|saturaci|mmhg/i
-  );
-  const diagnosticoHits = tomarOraciones(
-    ss,
-    /diagn[oó]stic|impresi[oó]n|impresiona|parece|cuadro de|sugestivo|\bdx\b|gastritis|infecci[oó]n|migra[nñ]a/i
-  );
-  const planHits = tomarOraciones(
-    ss,
-    /plan|tratamiento|indicar|recetar|prescri|tomar|indicaci[oó]n|cada \d|v[ií]a oral|\bmg\b|referir|solicitar|paracetamol|ibuprofeno|omeprazol/i
-  );
-  const alergiaHits = tomarOraciones(ss, /alerg/i);
-  const medicamentoHits = tomarOraciones(ss, /medicamento|est[aá] tomando|tableta|c[aá]psula|toma /i);
-  const pronosticoHits = tomarOraciones(ss, /pron[oó]stic|reservado|bueno para la vida/i);
-  const seguimientoHits = tomarOraciones(ss, /seguimiento|regresar|cita|volver|control en|en \d+\s*d[ií]as/i);
+  const texto = transcripcion.replace(/\s+/g, " ").trim();
+  if (!texto) return {};
 
-  const motivo = juntarOraciones(motivoHits, 2) || ss[0] || "";
-  const padecimiento = juntarOraciones(
-    padecimientoHits.filter((item) => item !== motivo),
-    4
-  ) || juntarOraciones(ss.slice(1, 4).filter((item) => item !== motivo), 3);
-  const exploracion = juntarOraciones(exploracionHits, 3);
-  const diagnostico = juntarOraciones(diagnosticoHits.filter((item) => item !== motivo && item !== padecimiento), 2);
-  const plan = juntarOraciones(planHits, 3);
+  const buscar = (re: RegExp) => texto.search(re);
+  const iExp = buscar(/exploraci[oó]n\s+f[ií]sica\s*[:\-]?\s*/i);
+  const iDx = buscar(/diagn[oó]stico(?:\s+(?:presuntivo|de|final))?\s*[:\-]?\s*/i);
+  const iPlan = buscar(
+    /\b(?:plan(?:\s+terap[eé]utico)?|tratamiento|se indica|indicar(?:se)?|paracetamol|ibuprofeno|omeprazol|amoxicilina)\b/i
+  );
+
+  const corteCuerpo = [iExp, iDx, iPlan].filter((n) => n >= 0).sort((a, b) => a - b)[0] ?? texto.length;
+  const cuerpo = texto.slice(0, corteCuerpo).trim();
+  const palabras = cuerpo.split(" ").filter(Boolean);
+  const motivoN = Math.min(22, Math.max(8, Math.floor(palabras.length * 0.3)));
+  const motivo = palabras.slice(0, motivoN).join(" ");
+  const padecimiento = palabras.slice(motivoN).join(" ");
+
+  const sliceHasta = (inicio: number, extras: number[]) => {
+    const fin = extras.filter((n) => n > inicio).sort((a, b) => a - b)[0] ?? texto.length;
+    return texto.slice(inicio, fin).trim();
+  };
+
+  let exploracion = "";
+  if (iExp >= 0) {
+    exploracion = sliceHasta(iExp, [iDx, iPlan]).replace(/^exploraci[oó]n\s+f[ií]sica\s*[:\-]?\s*/i, "");
+  }
+  let diagnostico = "";
+  if (iDx >= 0) {
+    diagnostico = sliceHasta(iDx, [iPlan]).replace(
+      /^diagn[oó]stico(?:\s+(?:presuntivo|de|final))?\s*[:\-]?\s*/i,
+      ""
+    );
+    diagnostico = diagnostico.split(/[.]/)[0]?.trim() || diagnostico.slice(0, 160);
+  }
+  let plan = "";
+  if (iPlan >= 0) {
+    plan = texto.slice(iPlan).trim();
+  }
 
   return {
-    motivo_consulta: motivo,
-    padecimiento_actual: padecimiento && padecimiento !== motivo ? padecimiento : "",
-    exploracion_fisica: exploracion,
-    diagnostico,
-    plan,
-    alergias: juntarOraciones(alergiaHits, 2),
-    medicamentos: juntarOraciones(medicamentoHits.filter((item) => !planHits.includes(item)), 3),
-    pronostico: juntarOraciones(pronosticoHits, 1),
-    seguimiento: juntarOraciones(seguimientoHits, 2),
+    motivo_consulta: recortarFragmento(motivo, texto),
+    padecimiento_actual: recortarFragmento(padecimiento && padecimiento !== motivo ? padecimiento : "", texto),
+    exploracion_fisica: recortarFragmento(exploracion, texto),
+    diagnostico: recortarFragmento(diagnostico, texto, 0.35),
+    plan: recortarFragmento(plan, texto, 0.4),
   };
 }
 
@@ -241,8 +235,8 @@ function sanitizarNotaContraTranscripcion(nota: NotaClinica, transcripcion: stri
     (value) => value.length > 48 && value !== normalizarComparacion(NO_MENCIONADO)
   );
   const duplicadosInternos =
-    valores.length >= 3 && valores.filter((value) => value === valores[0]).length >= 3;
-  if (duplicadosInternos || copias >= 3) {
+    valores.length >= 2 && valores.filter((value) => value === valores[0]).length >= 2;
+  if (duplicadosInternos || copias >= 2) {
     next.motivo_consulta = extraido.motivo_consulta || next.motivo_consulta;
     next.padecimiento_actual =
       extraido.padecimiento_actual && extraido.padecimiento_actual !== extraido.motivo_consulta
@@ -428,12 +422,37 @@ JSON con idioma_detectado, nota_medica_espanol y receta_paciente_nativo.`,
     parsed.nota = sanitizarNotaContraTranscripcion(parsed.nota, clipped);
     parsed.nota = await completarNotaNom004(env, parsed.nota, clipped, contextoExpediente);
     parsed.nota = sanitizarNotaContraTranscripcion(parsed.nota, clipped);
+    console.log(
+      JSON.stringify({
+        event: "nota_clinica_ok",
+        transcriptChars: clipped.length,
+        motivoChars: parsed.nota.motivo_consulta.length,
+        padecimientoChars: parsed.nota.padecimiento_actual.length,
+        diagnosticoChars: parsed.nota.diagnostico.length,
+        exploracionChars: parsed.nota.exploracion_fisica.length,
+        planChars: parsed.nota.plan.length,
+        motivoEqualsTranscript: parsed.nota.motivo_consulta.trim() === clipped.trim(),
+        padecimientoEqualsTranscript: parsed.nota.padecimiento_actual.trim() === clipped.trim(),
+        motivoPreview: parsed.nota.motivo_consulta.slice(0, 180),
+        diagnosticoPreview: parsed.nota.diagnostico.slice(0, 120),
+      })
+    );
     return parsed;
   } catch (error) {
+    const code = error && typeof error === "object" && "code" in error ? String((error as { code?: string }).code) : "";
+    const status = error && typeof error === "object" && "status" in error ? (error as { status?: number }).status : undefined;
     console.error(
       JSON.stringify({
         event: "nota_clinica_fallback",
+        code,
+        status,
         message: error instanceof Error ? error.message : "unknown",
+        usedLocalFallback: true,
+        transcriptChars: clipped.length,
+        hint:
+          code === "GROQ_NOT_CONFIGURED" || code === "GROQ_AUTH_FAILED"
+            ? "Configure GROQ_API_KEY en el Worker (wrangler secret put GROQ_API_KEY)."
+            : "Groq falló; se usó extractor local NOM-004.",
       })
     );
     const nota = sanitizarNotaContraTranscripcion(

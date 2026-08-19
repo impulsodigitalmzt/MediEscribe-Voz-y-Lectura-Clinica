@@ -1,6 +1,7 @@
 import { FileText, Loader2, Mic, Square, Upload } from 'lucide-react';
 import { useRef } from 'react';
 import { useSpeechDictation } from '../../hooks/useSpeechDictation';
+import VoiceEqualizer from './VoiceEqualizer';
 
 type Props = {
   dictado: string;
@@ -98,15 +99,7 @@ export default function VoiceDictationPanel({
             <p className="text-sm font-semibold text-red-700">Grabando — las barras se mueven con su voz</p>
             <span className="ml-auto text-xs font-medium text-red-600">Micrófono activo</span>
           </div>
-          <div className="voice-wave" aria-hidden="true">
-            {levels.map((level, index) => (
-              <span
-                key={index}
-                className={level > 0.55 ? 'is-loud' : undefined}
-                style={{ height: `${Math.round(12 + level * 72)}px` }}
-              />
-            ))}
-          </div>
+          <VoiceEqualizer levels={levels} />
         </div>
       )}
 

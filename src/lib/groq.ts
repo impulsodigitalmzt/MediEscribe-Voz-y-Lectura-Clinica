@@ -36,6 +36,26 @@ function maxTokensForModel(model: string, requested?: number): number {
   return Math.min(requested ?? compact, compact);
 }
 
+function logGroq(event: string, payload: Record<string, unknown>): void {
+  console.log(
+    JSON.stringify({
+      event,
+      ts: new Date().toISOString(),
+      ...payload,
+    })
+  );
+}
+
+function groqKeyMeta(env: Env): Record<string, unknown> {
+  const key = env.GROQ_API_KEY ?? "";
+  return {
+    hasGroqApiKey: Boolean(key),
+    groqApiKeyLength: key.length,
+    groqApiKeyPrefix: key ? `${key.slice(0, 4)}…` : "",
+    groqModel: env.GROQ_MODEL || "llama-3.1-8b-instant",
+  };
+}
+
 function shrinkMessages(messages: GroqChatMessage[], maxChars: number): GroqChatMessage[] {
   return messages.map((message) => {
     if (message.role !== "user" || message.content.length <= maxChars) return message;
@@ -52,12 +72,24 @@ export async function groqChatJson(
   options?: { temperature?: number; maxTokens?: number }
 ): Promise<Record<string, unknown>> {
   if (!env.GROQ_API_KEY) {
+    logGroq("groq_chat_missing_key", {
+      ...groqKeyMeta(env),
+      detail: "GROQ_API_KEY no está en el Worker. La nota caerá a fallback local y puede copiar texto crudo.",
+    });
     throw new AppError(503, "GROQ_API_KEY no está configurada.", "GROQ_NOT_CONFIGURED");
   }
 
   const model = env.GROQ_MODEL || "llama-3.1-8b-instant";
   let maxTokens = maxTokensForModel(model, options?.maxTokens);
   let payload = messages;
+  const userChars = messages.find((m) => m.role === "user")?.content.length ?? 0;
+
+  logGroq("groq_chat_request", {
+    ...groqKeyMeta(env),
+    maxTokens,
+    userChars,
+    messageCount: messages.length,
+  });
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
@@ -75,33 +107,68 @@ export async function groqChatJson(
       }),
     });
 
-    if (response.ok) {
-      const data = (await response.json()) as {
-        choices?: Array<{ message?: { content?: string } }>;
-      };
-      const content = data.choices?.[0]?.message?.content ?? "";
-      if (!content.trim()) {
-        throw new AppError(502, "Groq devolvió una respuesta vacía.", "GROQ_EMPTY_RESPONSE");
+    const errText = response.ok ? "" : await response.text();
+    if (!response.ok) {
+      const authFail = response.status === 401 || response.status === 403;
+      logGroq(authFail ? "groq_chat_auth_failed" : "groq_chat_failed", {
+        ...groqKeyMeta(env),
+        httpStatus: response.status,
+        attempt,
+        body: errText.slice(0, 800),
+        hint: authFail
+          ? "API key inválida o sin permiso. Revise wrangler secret put GROQ_API_KEY."
+          : undefined,
+      });
+      if (response.status === 413 && attempt === 0) {
+        maxTokens = Math.min(maxTokens, 900);
+        payload = shrinkMessages(payload, 3500);
+        continue;
       }
-      try {
-        return parseJsonObject(content);
-      } catch {
-        throw new AppError(502, "Groq devolvió JSON inválido para la nota médica.", "GROQ_INVALID_JSON");
-      }
+      throw new AppError(
+        502,
+        authFail
+          ? "Groq rechazó la autenticación (API key inválida o ausente)."
+          : "No se pudo redactar la nota médica con Groq.",
+        authFail ? "GROQ_AUTH_FAILED" : "GROQ_CHAT_FAILED"
+      );
     }
 
-    const errText = await response.text();
-    console.error(
-      JSON.stringify({ event: "groq_chat_failed", status: response.status, body: errText.slice(0, 300) })
-    );
-
-    if (response.status === 413 && attempt === 0) {
-      maxTokens = Math.min(maxTokens, 900);
-      payload = shrinkMessages(payload, 3500);
-      continue;
+    const data = (await response.json()) as {
+      choices?: Array<{ message?: { content?: string } }>;
+      error?: { message?: string; type?: string };
+    };
+    const content = data.choices?.[0]?.message?.content ?? "";
+    logGroq("groq_chat_raw_content", {
+      ...groqKeyMeta(env),
+      httpStatus: response.status,
+      contentChars: content.length,
+      contentPreview: content.slice(0, 1800),
+      groqError: data.error?.message ?? null,
+    });
+    if (!content.trim()) {
+      throw new AppError(502, "Groq devolvió una respuesta vacía.", "GROQ_EMPTY_RESPONSE");
     }
-
-    throw new AppError(502, "No se pudo redactar la nota médica con Groq.", "GROQ_CHAT_FAILED");
+    try {
+      const parsed = parseJsonObject(content);
+      const nota = (parsed.nota_medica_espanol ?? parsed.nota ?? parsed) as Record<string, unknown>;
+      logGroq("groq_chat_parsed_json", {
+        topKeys: Object.keys(parsed),
+        notaKeys: nota && typeof nota === "object" ? Object.keys(nota).slice(0, 40) : [],
+        motivoChars: typeof nota?.motivo_consulta === "string" ? nota.motivo_consulta.length : 0,
+        padecimientoChars: typeof nota?.padecimiento_actual === "string" ? nota.padecimiento_actual.length : 0,
+        diagnosticoChars: typeof nota?.diagnostico === "string" ? nota.diagnostico.length : 0,
+        exploracionChars: typeof nota?.exploracion_fisica === "string" ? nota.exploracion_fisica.length : 0,
+        planChars: typeof nota?.plan === "string" ? nota.plan.length : 0,
+        motivoPreview: typeof nota?.motivo_consulta === "string" ? nota.motivo_consulta.slice(0, 220) : null,
+      });
+      return parsed;
+    } catch (parseError) {
+      logGroq("groq_chat_invalid_json", {
+        message: parseError instanceof Error ? parseError.message : "parse_error",
+        contentPreview: content.slice(0, 800),
+      });
+      throw new AppError(502, "Groq devolvió JSON inválido para la nota médica.", "GROQ_INVALID_JSON");
+    }
   }
 
   throw new AppError(502, "No se pudo redactar la nota médica con Groq.", "GROQ_CHAT_FAILED");

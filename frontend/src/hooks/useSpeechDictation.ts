@@ -186,18 +186,17 @@ export function useSpeechDictation(onFinal: (transcript: string) => void) {
   }, [stopAnalyser]);
 
   const start = useCallback(async () => {
-    if (!recognitionRef.current) return;
     wantListenRef.current = true;
     setListening(true);
     try {
       await startAnalyser();
     } catch {
-      /* permission denied — dictation can still try */
+      /* permission denied — dictation can still try; equalizer stays visible */
     }
     try {
-      recognitionRef.current.start();
+      recognitionRef.current?.start();
     } catch {
-      /* already started */
+      /* already started or unsupported */
     }
   }, [startAnalyser]);
 

@@ -121,6 +121,19 @@ consultaRoutes.post("/texto", async (c) => {
       consultaId = (body.consulta_id ?? "").trim();
     }
 
+    console.log(
+      JSON.stringify({
+        event: "consulta_texto_start",
+        hasGroqApiKey: Boolean(c.env.GROQ_API_KEY),
+        groqApiKeyLength: c.env.GROQ_API_KEY ? c.env.GROQ_API_KEY.length : 0,
+        groqModel: c.env.GROQ_MODEL || "llama-3.1-8b-instant",
+        transcriptChars: transcripcion.trim().length,
+        transcriptPreview: transcripcion.trim().slice(0, 240),
+        consultaId: consultaId || null,
+        pacienteId: pacienteId || null,
+      })
+    );
+
     const result = await procesarConsultaDesdeTexto(
       c.env,
       {

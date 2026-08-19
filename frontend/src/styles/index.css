@@ -195,12 +195,33 @@ body, #root {
   border-color: #1e293b !important;
 }
 
-/* Text colours */
-.dark .text-slate-800 { color: #e2e8f0 !important; }
-.dark .text-slate-700 { color: #cbd5e1 !important; }
-.dark .text-slate-600 { color: #94a3b8 !important; }
-.dark .text-slate-500 { color: #64748b !important; }
-.dark .text-slate-400 { color: #475569 !important; }
+/* Text colours — light enough for contrast on #0f172a / #1e293b */
+.dark .text-slate-950,
+.dark .text-slate-900,
+.dark .text-gray-950,
+.dark .text-gray-900 { color: #f8fafc !important; }
+.dark .text-slate-800,
+.dark .text-gray-800 { color: #f1f5f9 !important; }
+.dark .text-slate-700,
+.dark .text-gray-700 { color: #e2e8f0 !important; }
+.dark .text-slate-600,
+.dark .text-gray-600 { color: #cbd5e1 !important; }
+.dark .text-slate-500,
+.dark .text-gray-500 { color: #94a3b8 !important; }
+.dark .text-slate-400,
+.dark .text-gray-400 { color: #94a3b8 !important; }
+.dark .text-slate-300 { color: #cbd5e1 !important; }
+
+.dark p,
+.dark span,
+.dark li,
+.dark label,
+.dark h1,
+.dark h2,
+.dark h3,
+.dark h4 {
+  color: inherit;
+}
 
 /* Backgrounds */
 .dark .bg-white        { background-color: #1e293b !important; }

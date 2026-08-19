@@ -1,5 +1,5 @@
 import { FileText, Loader2, Mic, Square, Upload } from 'lucide-react';
-import { useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useSpeechDictation } from '../../hooks/useSpeechDictation';
 import VoiceEqualizer from './VoiceEqualizer';
 
@@ -19,14 +19,21 @@ export default function VoiceDictationPanel({
 }: Props) {
   const dictadoRef = useRef(dictado);
   dictadoRef.current = dictado;
+  const [showWaves, setShowWaves] = useState(false);
   const { listening, interim, levels, supported, start, stop } = useSpeechDictation((chunk) => {
     const current = dictadoRef.current;
     onDictado(current ? `${current.trim()} ${chunk}` : chunk);
   });
 
-  const textoCaja = listening && interim ? `${dictado}${dictado ? ' ' : ''}${interim}` : dictado;
+  useEffect(() => {
+    if (listening) setShowWaves(true);
+  }, [listening]);
+
+  const capturing = showWaves || listening;
+  const textoCaja = capturing && interim ? `${dictado}${dictado ? ' ' : ''}${interim}` : dictado;
 
   const handleStart = () => {
+    setShowWaves(true);
     onRecordingStart?.();
     void start();
   };
@@ -38,6 +45,7 @@ export default function VoiceDictationPanel({
   const handleStopAndProcess = () => {
     const texto = textoCaja;
     if (texto !== dictado) onDictado(texto);
+    setShowWaves(false);
     stop();
     window.setTimeout(() => {
       procesarNota(dictadoRef.current || texto);
@@ -46,8 +54,9 @@ export default function VoiceDictationPanel({
 
   const handleGenerarTexto = () => {
     const texto = textoCaja;
-    if (listening) {
+    if (capturing) {
       if (texto !== dictado) onDictado(texto);
+      setShowWaves(false);
       stop();
       window.setTimeout(() => procesarNota(dictadoRef.current || texto), 350);
       return;
@@ -63,23 +72,19 @@ export default function VoiceDictationPanel({
       </p>
 
       <div className="flex flex-col sm:flex-row gap-3">
-        {supported ? (
-          <button
-            type="button"
-            className={
-              listening
-                ? 'btn-danger py-3.5 px-6 text-base font-semibold shadow-lg shadow-red-600/30 min-h-[52px] voice-record-btn is-recording'
-                : 'btn-primary py-3.5 px-6 text-base font-semibold shadow-lg shadow-teal-600/30 min-h-[52px] voice-record-btn'
-            }
-            onClick={listening ? handleStopAndProcess : handleStart}
-            disabled={generating}
-          >
-            {listening ? <Square className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
-            {listening ? 'Detener y redactar nota' : 'Dictar por voz'}
-          </button>
-        ) : (
-          <span className="text-sm text-slate-500">El dictado en vivo requiere Chrome o Edge.</span>
-        )}
+        <button
+          type="button"
+          className={
+            capturing
+              ? 'btn-danger py-3.5 px-6 text-base font-semibold shadow-lg shadow-red-600/30 min-h-[52px] voice-record-btn is-recording'
+              : 'btn-primary py-3.5 px-6 text-base font-semibold shadow-lg shadow-teal-600/30 min-h-[52px] voice-record-btn'
+          }
+          onClick={capturing ? handleStopAndProcess : handleStart}
+          disabled={generating}
+        >
+          {capturing ? <Square className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
+          {capturing ? 'Detener y redactar nota' : 'Dictar por voz'}
+        </button>
         <label className="btn-secondary py-3.5 px-6 text-sm font-medium cursor-pointer min-h-[52px]">
           <Upload className="w-4 h-4" />
           {audioFile ? audioFile.name : 'Subir audio'}
@@ -92,14 +97,19 @@ export default function VoiceDictationPanel({
         </label>
       </div>
 
-      {listening && (
+      {capturing && (
         <div className="rounded-xl border-2 border-red-400 bg-red-50 px-4 py-4 dark-recording-banner">
           <div className="flex items-center gap-2 mb-3">
             <span className="recording-dot" />
-            <p className="text-sm font-semibold text-red-700">Grabando — las barras se mueven con su voz</p>
+            <p className="text-sm font-semibold text-red-700">Grabando — ondas del micrófono</p>
             <span className="ml-auto text-xs font-medium text-red-600">Micrófono activo</span>
           </div>
           <VoiceEqualizer levels={levels} />
+          {!supported && (
+            <p className="mt-2 text-xs text-red-700">
+              Este navegador no transcribe en vivo. Las ondas confirman el micrófono; use Chrome o Edge para dictar texto.
+            </p>
+          )}
         </div>
       )}
 

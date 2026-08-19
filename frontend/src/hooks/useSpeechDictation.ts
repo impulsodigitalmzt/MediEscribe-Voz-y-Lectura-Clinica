@@ -27,6 +27,14 @@ type RecognitionInstance = {
   onend: (() => void) | null;
 };
 
+function getAudioContextConstructor(): (new () => AudioContext) | undefined {
+  const win = window as unknown as {
+    AudioContext?: new () => AudioContext;
+    webkitAudioContext?: new () => AudioContext;
+  };
+  return win.AudioContext || win.webkitAudioContext;
+}
+
 async function openClinicalMic(): Promise<MediaStream> {
   try {
     const stream = await navigator.mediaDevices.getUserMedia(MIC_CONSTRAINTS);
@@ -48,8 +56,8 @@ async function openClinicalMic(): Promise<MediaStream> {
 export function useSpeechDictation(onFinal: (transcript: string) => void) {
   const [listening, setListening] = useState(false);
   const [interim, setInterim] = useState('');
-  const [supported, setSupported] = useState(false);
-  const [levels, setLevels] = useState<number[]>(() => Array.from({ length: BAR_COUNT }, () => 0.08));
+  const [supported, setSupported] = useState(true);
+  const [levels, setLevels] = useState<number[]>(() => Array.from({ length: BAR_COUNT }, () => 0.2));
   const recognitionRef = useRef<RecognitionInstance | null>(null);
   const wantListenRef = useRef(false);
   const onFinalRef = useRef(onFinal);
@@ -59,15 +67,23 @@ export function useSpeechDictation(onFinal: (transcript: string) => void) {
   const stopAnalyser = useCallback(() => {
     analyserCleanupRef.current?.();
     analyserCleanupRef.current = null;
-    setLevels(Array.from({ length: BAR_COUNT }, () => 0.08));
+    setLevels(Array.from({ length: BAR_COUNT }, () => 0.2));
   }, []);
 
-  const startAnalyser = useCallback(async () => {
+  const startAnalyser = useCallback(async (precreated?: AudioContext) => {
     stopAnalyser();
     if (!navigator.mediaDevices?.getUserMedia) return;
+
+    const Ctx = getAudioContextConstructor();
+    const audioCtx = precreated && precreated.state !== 'closed'
+      ? precreated
+      : (Ctx ? new Ctx() : null);
+    if (!audioCtx) return;
+
     const stream = await openClinicalMic();
-    const audioCtx = new AudioContext();
-    if (audioCtx.state === 'suspended') await audioCtx.resume();
+    if (audioCtx.state === 'suspended') {
+      await audioCtx.resume();
+    }
 
     const source = audioCtx.createMediaStreamSource(stream);
     const compressor = audioCtx.createDynamicsCompressor();
@@ -117,7 +133,7 @@ export function useSpeechDictation(onFinal: (transcript: string) => void) {
         const freqLevel = (freq[idx] + freq[neighbour]) / 510;
         const sample = time[Math.floor((i / BAR_COUNT) * time.length)];
         const wave = Math.abs((sample - 128) / 128);
-        return Math.max(0.06, Math.min(1, freqLevel * 0.85 + wave * 0.45 + rms * 0.9));
+        return Math.max(0.08, Math.min(1, freqLevel * 0.85 + wave * 0.45 + rms * 0.9));
       });
       setLevels(bars);
       raf = requestAnimationFrame(tick);
@@ -188,10 +204,17 @@ export function useSpeechDictation(onFinal: (transcript: string) => void) {
   const start = useCallback(async () => {
     wantListenRef.current = true;
     setListening(true);
+
+    const Ctx = getAudioContextConstructor();
+    const audioCtx = Ctx ? new Ctx() : undefined;
+    if (audioCtx && audioCtx.state === 'suspended') {
+      void audioCtx.resume();
+    }
+
     try {
-      await startAnalyser();
+      await startAnalyser(audioCtx);
     } catch {
-      /* permission denied — dictation can still try; equalizer stays visible */
+      /* permission denied — CSS waves still run */
     }
     try {
       recognitionRef.current?.start();

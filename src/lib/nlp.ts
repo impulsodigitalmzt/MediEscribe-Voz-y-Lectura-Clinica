@@ -2,6 +2,7 @@ const SYMPTOM_KEYWORDS = [
   "pain", "ache", "fever", "cough", "nausea", "vomiting", "diarrhea",
   "fatigue", "weakness", "dizziness", "headache", "shortness of breath",
   "chest pain", "swelling", "rash", "dolor", "fiebre", "tos", "nauseas",
+  "náusea", "cefalea", "mareo", "diarrea", "vómito", "vomito",
 ];
 
 const NON_CLINICAL = [
@@ -33,18 +34,18 @@ export function extractClinicalEntities(transcript: string): ExtractedEntities {
 
   return {
     chief_complaint: sentences.find((s) =>
-      /(?:here|came|coming|visit|complain|concern|reason for|what brings)/i.test(s)
+      /(?:here|came|coming|visit|complain|concern|reason for|what brings|motivo|viene por|consulta por|acude por|me duele|dolor de)/i.test(s)
     ) ?? "",
     symptoms: sentences.filter((s) => SYMPTOM_KEYWORDS.some((k) => s.toLowerCase().includes(k))),
-    medications: pick(/\b(?:prescribed?|taking|started?|dose|mg|mcg|units?|tablets?)\b/i),
-    allergies: pick(/\b(?:allergic|allergy|allergies|reacci[oó]n)\b/i),
-    procedures: pick(/\b(?:surgery|biopsy|scan|x-ray|mri|ct|ultrasound|ecg|ekg|colonoscopy|endoscopy)\b/i),
-    diagnoses: pick(/\b(?:diagnos|assessment|impression|suspect|differential|rule out|r\/o)\b/i),
-    family_history_mentions: pick(/\b(?:father|mother|parent|brother|sister|family|grandmother|grandfather)\b/i),
-    social_history_mentions: pick(/\b(?:smok|alcohol|drink|occupation|married|exercise|tobacco|vap)\b/i),
-    exam_findings: pick(/\b(?:exam|palpat|auscultat|inspect|tender|swollen|murmur|vital)\b/i),
-    plan_items: pick(/\b(?:prescri|order|refer|start|increase|decrease|discontinue|recommend)\b/i),
-    follow_up: pick(/\b(?:follow.?up|return|come back|weeks?|months?|call if|warning)\b/i),
+    medications: pick(/\b(?:prescribed?|taking|started?|dose|mg|mcg|units?|tablets?|medicamento|tableta|c[aá]psula|toma )\b/i),
+    allergies: pick(/\b(?:allergic|allergy|allergies|reacci[oó]n|alerg)/i),
+    procedures: pick(/\b(?:surgery|biopsy|scan|x-ray|mri|ct|ultrasound|ecg|ekg|colonoscopy|endoscopy|cirug[ií]a|radiograf[ií]a|ultrasonido)\b/i),
+    diagnoses: pick(/\b(?:diagnos|assessment|impression|suspect|differential|rule out|r\/o|diagn[oó]stic|impresi[oó]n|cuadro de)\b/i),
+    family_history_mentions: pick(/\b(?:father|mother|parent|brother|sister|family|grandmother|grandfather|padre|madre|hermano|familia)\b/i),
+    social_history_mentions: pick(/\b(?:smok|alcohol|drink|occupation|married|exercise|tobacco|vap|fuma|bebe|ocupaci[oó]n)\b/i),
+    exam_findings: pick(/\b(?:exam|palpat|auscultat|inspect|tender|swollen|murmur|vital|exploraci[oó]n|abdomen|pulm[oó]n|\bta\b|\bfc\b)\b/i),
+    plan_items: pick(/\b(?:prescri|order|refer|start|increase|decrease|discontinue|recommend|indicar|recetar|tratamiento|plan|tomar)\b/i),
+    follow_up: pick(/\b(?:follow.?up|return|come back|weeks?|months?|call if|warning|seguimiento|regresar|cita|volver)\b/i),
   };
 }
 

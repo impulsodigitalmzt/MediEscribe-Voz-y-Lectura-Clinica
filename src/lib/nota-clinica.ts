@@ -44,47 +44,50 @@ const IDIOMA_NOMBRE: Record<string, string> = {
 };
 
 const SYSTEM_PROMPT = `Eres el motor de documentación clínica de MediEscribe.
-A partir de la transcripción de una consulta (en cualquier idioma), extrae únicamente lo dicho y genera SIEMPRE dos bloques JSON separados.
+Analizas la transcripción de UNA consulta y extraes datos hacia campos NOM-004-SSA3-2012.
 
-BLOQUE 1 — nota_medica_espanol (OBLIGATORIO, SOLO ESPAÑOL):
-Nota de evolución / consulta para el expediente clínico, redactada estrictamente en español clínico profesional, conforme a NOM-004-SSA3-2012.
-Debe incluir identificación del paciente, fecha, hora, motivo, exploración física, diagnóstico, pronóstico y tratamiento estructurado (dosis, vía, periodicidad).
-Si un dato no se mencionó, usa exactamente "${NO_MENCIONADO}". NUNCA inventes.
+SALIDA: un solo JSON con:
+- idioma_detectado (ISO 639-1)
+- nota_medica_espanol (objeto, SIEMPRE español clínico)
+- receta_paciente_nativo (objeto, idioma del paciente)
 
-BLOQUE 2 — receta_paciente_nativo (OBLIGATORIO, IDIOMA NATIVO DETECTADO):
-Indicaciones, receta y resumen PARA EL PACIENTE, en el idioma nativo de la consulta (el que habló el paciente / el detectado por Whisper).
-Lenguaje claro, sin jerga innecesaria, listo para imprimir o enviar. No copies la nota clínica; traduce y simplifica las indicaciones terapéuticas.
+PROHIBIDO:
+- Copiar la transcripción completa en cualquier campo.
+- Pegar el mismo párrafo en dos o más campos.
+- Inventar datos no dichos.
+- Llenar un campo vacío con todo el relato "por si acaso".
 
-IDENTIFICACIÓN (en nota_medica_espanol):
-nombre_paciente, edad, ocupacion. Si no se mencionaron, "${NO_MENCIONADO}".
+CÓMO LLENAR nota_medica_espanol (cada campo = SOLO su contenido, 1 a 4 oraciones):
+- motivo_consulta: razón breve de la visita (una frase). NO el relato completo.
+- padecimiento_actual: historia de la enfermedad actual (inicio, tiempo, síntomas, evolución). Distinto del motivo.
+- interrogatorio: respuestas dirigidas, ROS. Si no hubo, "${NO_MENCIONADO}".
+- exploracion_fisica: signos vitales y hallazgos. Si no se exploró, "${NO_MENCIONADO}".
+- diagnostico: impresión diagnóstica breve. NO copies el padecimiento.
+- pronostico: solo si se dijo. Si no, "${NO_MENCIONADO}".
+- plan: indicaciones (estudios, medidas, cita).
+- tratamiento: array {medicamento, dosis, via, periodicidad}. [] si no hay fármacos.
+- medicamentos: fármacos que YA toma el paciente (antecedente), no el plan de hoy.
+- alergias, antecedentes_*: solo lo mencionado.
+- resumen: 2-4 oraciones (id, motivo, dx, plan). NO la transcripción cruda.
+- Si un dato no se mencionó: exactamente "${NO_MENCIONADO}".
 
-REGLAS:
-1. NUNCA inventes datos clínicos.
-2. Conserva la incertidumbre. Marca dudas en campos_inciertos.
-3. Elimina saludos, charla social y muletillas.
-4. motivo_consulta y padecimiento_actual son secciones distintas.
-5. resumen (en español) = 2-4 oraciones con identificación, motivo, diagnóstico y plan.
-6. Si hay EXPEDIENTE MAESTRO, copia identificación desde ahí. El historial previo no es el cuadro de HOY.
-7. idioma_detectado: código ISO 639-1 del idioma de la conversación (es, en, fr, pt, etc.).
-8. Devuelve SOLO un objeto JSON con exactamente estas claves de primer nivel:
-   idioma_detectado (string),
-   nota_medica_espanol (objeto),
-   receta_paciente_nativo (objeto).
+EJEMPLO DE ERROR: motivo_consulta = padecimiento_actual = diagnostico = todo el dictado.
+EJEMPLO CORRECTO: motivo_consulta "Cefalea de 3 días"; padecimiento_actual "Inicio gradual, 7/10, sin fiebre"; diagnostico "Cefalea tensional"; exploracion_fisica "${NO_MENCIONADO}" si no se exploró.
 
-nota_medica_espanol claves:
-   nombre_paciente, edad, sexo, domicilio, ocupacion, fecha, hora,
-   motivo_consulta, padecimiento_actual, interrogatorio, antecedentes_personales,
-   antecedentes_quirurgicos, medicamentos, alergias, antecedentes_familiares,
-   antecedentes_sociales, exploracion_fisica, estudios, diagnostico_presuntivo,
-   diagnosticos_diferenciales, diagnostico, pronostico, plan, tratamiento (array de
-   {medicamento, dosis, via, periodicidad}), seguimiento, notas_evolucion, resumen,
-   medico_nombre, medico_cedula,
-   campos_inciertos (array de strings), secciones_faltantes (array de strings).
+receta_paciente_nativo: indicaciones claras para el paciente, no copies la nota.`;
 
-receta_paciente_nativo claves:
-   idioma, idioma_nombre, titulo, resumen, indicaciones,
-   medicamentos (array de {medicamento, dosis, via, periodicidad, instruccion}),
-   alarmas, seguimiento.`;
+const CAMPOS_NARRATIVOS = [
+  "motivo_consulta",
+  "padecimiento_actual",
+  "interrogatorio",
+  "antecedentes_personales",
+  "exploracion_fisica",
+  "diagnostico",
+  "pronostico",
+  "plan",
+  "notas_evolucion",
+  "resumen",
+] as const;
 
 const TEXT_KEYS = [
   "nombre_paciente",
@@ -136,6 +139,139 @@ function ahoraMexico(): { fecha: string; hora: string } {
   return { fecha: `${get("year")}-${get("month")}-${get("day")}`, hora: `${get("hour")}:${get("minute")}` };
 }
 
+function normalizarComparacion(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/\[no mencionado\]/g, "")
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function esCopiaDeTranscripcion(campo: string, transcripcion: string): boolean {
+  const a = normalizarComparacion(campo);
+  const b = normalizarComparacion(transcripcion);
+  if (a.length < 48 || b.length < 48) return false;
+  if (a === b) return true;
+  const shorter = a.length <= b.length ? a : b;
+  const longer = a.length <= b.length ? b : a;
+  return longer.includes(shorter) && shorter.length / longer.length >= 0.72;
+}
+
+function oracionesClinicas(texto: string): string[] {
+  return texto
+    .split(/(?<=[.!?…;:])\s+|\n+/)
+    .map((item) => item.trim())
+    .filter((item) => item.length > 8);
+}
+
+function juntarOraciones(items: string[], max = 4): string {
+  const unique: string[] = [];
+  for (const item of items) {
+    if (!unique.includes(item)) unique.push(item);
+  }
+  return unique.slice(0, max).join(" ").trim();
+}
+
+function tomarOraciones(oraciones: string[], patron: RegExp): string[] {
+  return oraciones.filter((item) => patron.test(item));
+}
+
+function extraerSeccionesNom004(transcripcion: string): Partial<NotaClinica> {
+  const ss = oracionesClinicas(transcripcion);
+  const motivoHits = tomarOraciones(
+    ss,
+    /motivo|viene por|consulta por|acude por|me duele|dolor de|qu[eé] le trae|aqu[ií] por|cefalea|tos|fiebre/i
+  );
+  const padecimientoHits = tomarOraciones(
+    ss,
+    /desde hace|hace \d|inici[oó]|comenz[oó]|evoluci[oó]n|se acompa[nñ]a|empeor|mejor[oó]|intensidad|nause|diarrea|padecimiento|s[ií]ntoma/i
+  );
+  const exploracionHits = tomarOraciones(
+    ss,
+    /exploraci[oó]n|signos vitales|\bta\b|\bfc\b|\bfr\b|temperatura|abdomen|pulm[oó]n|auscult|palpaci|blando|tenso|ruidos|saturaci|mmhg/i
+  );
+  const diagnosticoHits = tomarOraciones(
+    ss,
+    /diagn[oó]stic|impresi[oó]n|impresiona|parece|cuadro de|sugestivo|\bdx\b|gastritis|infecci[oó]n|migra[nñ]a/i
+  );
+  const planHits = tomarOraciones(
+    ss,
+    /plan|tratamiento|indicar|recetar|prescri|tomar|indicaci[oó]n|cada \d|v[ií]a oral|\bmg\b|referir|solicitar|paracetamol|ibuprofeno|omeprazol/i
+  );
+  const alergiaHits = tomarOraciones(ss, /alerg/i);
+  const medicamentoHits = tomarOraciones(ss, /medicamento|est[aá] tomando|tableta|c[aá]psula|toma /i);
+  const pronosticoHits = tomarOraciones(ss, /pron[oó]stic|reservado|bueno para la vida/i);
+  const seguimientoHits = tomarOraciones(ss, /seguimiento|regresar|cita|volver|control en|en \d+\s*d[ií]as/i);
+
+  const motivo = juntarOraciones(motivoHits, 2) || ss[0] || "";
+  const padecimiento = juntarOraciones(
+    padecimientoHits.filter((item) => item !== motivo),
+    4
+  ) || juntarOraciones(ss.slice(1, 4).filter((item) => item !== motivo), 3);
+  const exploracion = juntarOraciones(exploracionHits, 3);
+  const diagnostico = juntarOraciones(diagnosticoHits.filter((item) => item !== motivo && item !== padecimiento), 2);
+  const plan = juntarOraciones(planHits, 3);
+
+  return {
+    motivo_consulta: motivo,
+    padecimiento_actual: padecimiento && padecimiento !== motivo ? padecimiento : "",
+    exploracion_fisica: exploracion,
+    diagnostico,
+    plan,
+    alergias: juntarOraciones(alergiaHits, 2),
+    medicamentos: juntarOraciones(medicamentoHits.filter((item) => !planHits.includes(item)), 3),
+    pronostico: juntarOraciones(pronosticoHits, 1),
+    seguimiento: juntarOraciones(seguimientoHits, 2),
+  };
+}
+
+function sanitizarNotaContraTranscripcion(nota: NotaClinica, transcripcion: string): NotaClinica {
+  const next = { ...nota };
+  const extraido = extraerSeccionesNom004(transcripcion);
+  let copias = 0;
+  for (const key of CAMPOS_NARRATIVOS) {
+    if (esCopiaDeTranscripcion(next[key], transcripcion)) {
+      copias += 1;
+      const reemplazo = extraido[key];
+      next[key] = typeof reemplazo === "string" && reemplazo.trim() ? reemplazo.trim() : NO_MENCIONADO;
+    }
+  }
+  const valores = CAMPOS_NARRATIVOS.map((key) => normalizarComparacion(next[key])).filter(
+    (value) => value.length > 48 && value !== normalizarComparacion(NO_MENCIONADO)
+  );
+  const duplicadosInternos =
+    valores.length >= 3 && valores.filter((value) => value === valores[0]).length >= 3;
+  if (duplicadosInternos || copias >= 3) {
+    next.motivo_consulta = extraido.motivo_consulta || next.motivo_consulta;
+    next.padecimiento_actual =
+      extraido.padecimiento_actual && extraido.padecimiento_actual !== extraido.motivo_consulta
+        ? extraido.padecimiento_actual
+        : NO_MENCIONADO;
+    next.exploracion_fisica = extraido.exploracion_fisica || NO_MENCIONADO;
+    next.diagnostico = extraido.diagnostico || NO_MENCIONADO;
+    next.plan = extraido.plan || NO_MENCIONADO;
+    next.pronostico = extraido.pronostico || NO_MENCIONADO;
+    next.interrogatorio = NO_MENCIONADO;
+    next.notas_evolucion = NO_MENCIONADO;
+    if (esCopiaDeTranscripcion(next.resumen, transcripcion)) {
+      next.resumen = "";
+    }
+  }
+  if (!next.resumen || next.resumen === NO_MENCIONADO || esCopiaDeTranscripcion(next.resumen, transcripcion)) {
+    next.resumen = buildResumen(next);
+  }
+  next.secciones_faltantes = TEXT_KEYS.filter((key) => next[key] === NO_MENCIONADO);
+  return next;
+}
+
+function objetoNotaDesdeRespuesta(raw: Record<string, unknown>): Record<string, unknown> {
+  const nested = asObject(raw.nota_medica_espanol) ?? asObject(raw.nota);
+  if (nested) return nested;
+  if (typeof raw.motivo_consulta === "string" || typeof raw.padecimiento_actual === "string") return raw;
+  return {};
+}
+
 function estaVacioLocal(value: string | undefined): boolean {
   return !value || /^(?:\s*|\[NO MENCIONADO\]|\[NOT DISCUSSED\]|n\/a|na|s\/?d)$/i.test(value);
 }
@@ -162,9 +298,6 @@ export function aplicarIdentidadPaciente(
   }
   if (paciente.antecedentes_importantes?.cronicos && estaVacioLocal(next.antecedentes_personales)) {
     next.antecedentes_personales = paciente.antecedentes_importantes.cronicos;
-  }
-  if (estaVacioLocal(next.notas_evolucion)) {
-    next.notas_evolucion = next.padecimiento_actual;
   }
   return next;
 }
@@ -273,25 +406,28 @@ export async function redactarNotaClinica(
       {
         role: "user",
         content: `Especialidad: ${especialidad}
-Idioma detectado por Whisper (úsalo en receta_paciente_nativo e idioma_detectado): ${idiomaHint || "desconocido — detéctalo de la transcripción"} (${nombreNativo})
-${conocido ? `Nombre conocido del expediente (úsalo en nombre_paciente): ${conocido}` : "No hay nombre previo; extrae identificación de la transcripción."}
+Idioma de la receta (receta_paciente_nativo e idioma_detectado): ${idiomaHint || "desconocido — detéctalo"} (${nombreNativo})
+${conocido ? `Nombre del expediente (nombre_paciente): ${conocido}` : "Extrae identificación solo si se dijo."}
 ${datos.sexo ? `Sexo conocido: ${datos.sexo}` : ""}
 ${datos.domicilio ? `Domicilio conocido: ${datos.domicilio}` : ""}
 ${datos.medicoNombre ? `Médico tratante: ${datos.medicoNombre}` : ""}
 ${datos.medicoCedula ? `Cédula profesional: ${datos.medicoCedula}` : ""}
 ${contextoExpediente ? `\n${contextoExpediente}\n` : ""}
 
-nota_medica_espanol: SIEMPRE en español (NOM-004).
-receta_paciente_nativo: SIEMPRE en ${nombreNativo}.
+TAREA: analiza la transcripción y DISTRIBUYE cada dato en su campo NOM-004.
+No copies el dictado completo en las casillas. Un campo = un tipo de dato.
+Si no se dijo, usa "${NO_MENCIONADO}".
 
-TRANSCRIPCIÓN DE ESTA CONSULTA:
+TRANSCRIPCIÓN:
 ${clipped}
 
-Devuelve SOLO el JSON con idioma_detectado, nota_medica_espanol y receta_paciente_nativo.`,
+JSON con idioma_detectado, nota_medica_espanol y receta_paciente_nativo.`,
       },
     ]);
     const parsed = parseDocumentacionDual(raw, clipped, conocido, datos, idiomaHint);
+    parsed.nota = sanitizarNotaContraTranscripcion(parsed.nota, clipped);
     parsed.nota = await completarNotaNom004(env, parsed.nota, clipped, contextoExpediente);
+    parsed.nota = sanitizarNotaContraTranscripcion(parsed.nota, clipped);
     return parsed;
   } catch (error) {
     console.error(
@@ -300,7 +436,10 @@ Devuelve SOLO el JSON con idioma_detectado, nota_medica_espanol y receta_pacient
         message: error instanceof Error ? error.message : "unknown",
       })
     );
-    const nota = fallbackNota(clipped, entities, conocido, datos);
+    const nota = sanitizarNotaContraTranscripcion(
+      fallbackNota(clipped, entities, conocido, datos),
+      clipped
+    );
     return {
       nota,
       receta: recetaDesdeNota(nota, idiomaHint || "es"),
@@ -379,7 +518,7 @@ export function normalizeNota(
   if (transcripcion.trim().length < 40 && !nota.campos_inciertos.includes("transcripcion_corta")) {
     nota.campos_inciertos = [...nota.campos_inciertos, "transcripcion_corta"];
   }
-  return aplicarSelloLegal(nota, datos);
+  return sanitizarNotaContraTranscripcion(aplicarSelloLegal(nota, datos), transcripcion);
 }
 
 function asObject(value: unknown): Record<string, unknown> | null {
@@ -393,7 +532,7 @@ export function parseDocumentacionDual(
   datos: DatosMedico,
   idiomaHint: string
 ): DocumentacionConsulta {
-  const notaRaw = asObject(raw.nota_medica_espanol) ?? asObject(raw.nota) ?? raw;
+  const notaRaw = objetoNotaDesdeRespuesta(raw);
   const recetaRaw = asObject(raw.receta_paciente_nativo) ?? asObject(raw.receta);
   const idioma =
     normalizeLanguageCode(String(raw.idioma_detectado ?? recetaRaw?.idioma ?? "")) || idiomaHint || "es";
@@ -401,6 +540,12 @@ export function parseDocumentacionDual(
   const receta = recetaRaw ? parseReceta(recetaRaw, idioma, nota) : recetaDesdeNota(nota, idioma);
   receta.idioma = receta.idioma || idioma;
   receta.idioma_nombre = receta.idioma_nombre || nombreIdioma(receta.idioma);
+  if (esCopiaDeTranscripcion(receta.resumen, transcripcion)) {
+    receta.resumen = nota.resumen !== NO_MENCIONADO ? nota.resumen : "";
+  }
+  if (esCopiaDeTranscripcion(receta.indicaciones, transcripcion)) {
+    receta.indicaciones = nota.plan !== NO_MENCIONADO ? nota.plan : "";
+  }
   return { nota, receta, idioma_detectado: idioma };
 }
 
@@ -516,6 +661,7 @@ function fallbackNota(
 ): NotaClinica {
   const orEmpty = (value: string) => value.trim() || NO_MENCIONADO;
   const id = extraerIdentificacion(transcripcion);
+  const secciones = extraerSeccionesNom004(transcripcion);
   const sello = ahoraMexico();
   const nota: NotaClinica = {
     nombre_paciente: orEmpty(id.nombre || pacienteConocido),
@@ -528,22 +674,22 @@ function fallbackNota(
     medico_nombre: orEmpty(datos.medicoNombre ?? ""),
     medico_cedula: orEmpty(datos.medicoCedula ?? ""),
     medico_especialidad: orEmpty(datos.medicoEspecialidad ?? ""),
-    motivo_consulta: orEmpty(entities.chief_complaint),
-    padecimiento_actual: orEmpty(entities.symptoms.join(" ")),
+    motivo_consulta: orEmpty(secciones.motivo_consulta || entities.chief_complaint),
+    padecimiento_actual: orEmpty(secciones.padecimiento_actual || entities.symptoms.join(" ")),
     interrogatorio: NO_MENCIONADO,
     antecedentes_personales: NO_MENCIONADO,
     antecedentes_quirurgicos: orEmpty(entities.procedures.join("\n")),
-    medicamentos: orEmpty(entities.medications.join("\n")),
-    alergias: orEmpty(entities.allergies.join("\n")),
+    medicamentos: orEmpty(secciones.medicamentos || entities.medications.join("\n")),
+    alergias: orEmpty(secciones.alergias || entities.allergies.join("\n")),
     antecedentes_familiares: orEmpty(entities.family_history_mentions.join("\n")),
     antecedentes_sociales: orEmpty(entities.social_history_mentions.join("\n")),
-    exploracion_fisica: orEmpty(entities.exam_findings.join("\n")),
+    exploracion_fisica: orEmpty(secciones.exploracion_fisica || entities.exam_findings.join("\n")),
     estudios: NO_MENCIONADO,
     diagnostico_presuntivo: orEmpty(entities.diagnoses.join("\n")),
     diagnosticos_diferenciales: NO_MENCIONADO,
-    diagnostico: orEmpty(entities.diagnoses.join("\n")),
-    pronostico: NO_MENCIONADO,
-    plan: orEmpty(entities.plan_items.join("\n")),
+    diagnostico: orEmpty(secciones.diagnostico || entities.diagnoses.join("\n")),
+    pronostico: orEmpty(secciones.pronostico || ""),
+    plan: orEmpty(secciones.plan || entities.plan_items.join("\n")),
     tratamiento: [],
     seguimiento: orEmpty(entities.follow_up.join("\n")),
     notas_evolucion: NO_MENCIONADO,
@@ -579,31 +725,35 @@ async function completarNotaNom004(
       { role: "system", content: SYSTEM_PROMPT },
       {
         role: "user",
-        content: `La nota preliminar NO cumple NOM-004-SSA3-2012. Completa SOLO con lo dicho en la transcripción o en el expediente maestro. No inventes.
+        content: `Completa SOLO los faltantes NOM-004 con fragmentos ESPECÍFICOS de la transcripción.
+PROHIBIDO pegar la transcripción completa en un campo. Si no hay dato, usa "${NO_MENCIONADO}".
 Faltantes: ${dictamen.guia.join("; ")}
 ${contextoExpediente ? `\n${contextoExpediente}\n` : ""}
 
-NOTA PRELIMINAR:
+NOTA PRELIMINAR (conserva lo que ya está bien y corto):
 ${JSON.stringify(nota)}
 
-TRANSCRIPCIÓN:
+TRANSCRIPCIÓN (solo para extraer frases puntuales):
 ${transcripcion}
 
-Devuelve SOLO el JSON. Puedes devolver nota_medica_espanol o la nota plana. La nota debe seguir en español.`,
+Devuelve JSON con nota_medica_espanol. Español clínico. Cada campo distinto.`,
       },
     ]);
-    const notaRaw = asObject(raw.nota_medica_espanol) ?? asObject(raw.nota) ?? raw;
+    const notaRaw = objetoNotaDesdeRespuesta(raw);
     const reparada = normalizeNota(notaRaw, transcripcion, nota.nombre_paciente);
     reparada.medico_nombre = nota.medico_nombre;
     reparada.medico_cedula = nota.medico_cedula;
     reparada.medico_especialidad = nota.medico_especialidad;
     reparada.fecha = nota.fecha;
     reparada.hora = nota.hora;
-    return aplicarSelloLegal(reparada, {
-      medicoNombre: nota.medico_nombre,
-      medicoCedula: nota.medico_cedula,
-      medicoEspecialidad: nota.medico_especialidad,
-    });
+    return sanitizarNotaContraTranscripcion(
+      aplicarSelloLegal(reparada, {
+        medicoNombre: nota.medico_nombre,
+        medicoCedula: nota.medico_cedula,
+        medicoEspecialidad: nota.medico_especialidad,
+      }),
+      transcripcion
+    );
   } catch (error) {
     console.error(
       JSON.stringify({

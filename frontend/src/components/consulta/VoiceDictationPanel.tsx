@@ -30,16 +30,35 @@ export default function VoiceDictationPanel({
     void start();
   };
 
+  const procesarNota = (texto: string) => {
+    onGenerateText(texto.trim());
+  };
+
+  const handleStopAndProcess = () => {
+    const texto = textoCaja;
+    if (texto !== dictado) onDictado(texto);
+    stop();
+    window.setTimeout(() => {
+      procesarNota(dictadoRef.current || texto);
+    }, 350);
+  };
+
   const handleGenerarTexto = () => {
-    if (listening) stop();
-    onGenerateText(textoCaja);
+    const texto = textoCaja;
+    if (listening) {
+      if (texto !== dictado) onDictado(texto);
+      stop();
+      window.setTimeout(() => procesarNota(dictadoRef.current || texto), 350);
+      return;
+    }
+    procesarNota(texto);
   };
 
   return (
     <section className="card p-4 sm:p-5 space-y-3 no-print">
       <h2 className="text-sm font-semibold text-slate-800">Editor de nota — dictado y texto</h2>
       <p className="text-sm text-slate-600">
-        Dicte con el micrófono, pegue la transcripción o cargue un audio. La IA redacta la nota sobre el expediente.
+        Dicte con el micrófono, pegue la transcripción o cargue un audio. Al detener, la IA llena la nota NOM-004.
       </p>
 
       <div className="flex flex-col sm:flex-row gap-3">
@@ -51,10 +70,11 @@ export default function VoiceDictationPanel({
                 ? 'btn-danger py-3.5 px-6 text-base font-semibold shadow-lg shadow-red-600/30 min-h-[52px] voice-record-btn is-recording'
                 : 'btn-primary py-3.5 px-6 text-base font-semibold shadow-lg shadow-teal-600/30 min-h-[52px] voice-record-btn'
             }
-            onClick={listening ? stop : handleStart}
+            onClick={listening ? handleStopAndProcess : handleStart}
+            disabled={generating}
           >
             {listening ? <Square className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
-            {listening ? 'Detener grabación' : 'Dictar por voz'}
+            {listening ? 'Detener y redactar nota' : 'Dictar por voz'}
           </button>
         ) : (
           <span className="text-sm text-slate-500">El dictado en vivo requiere Chrome o Edge.</span>
@@ -75,14 +95,15 @@ export default function VoiceDictationPanel({
         <div className="rounded-xl border-2 border-red-400 bg-red-50 px-4 py-4 dark-recording-banner">
           <div className="flex items-center gap-2 mb-3">
             <span className="recording-dot" />
-            <p className="text-sm font-semibold text-red-700">Grabando — hable con naturalidad</p>
+            <p className="text-sm font-semibold text-red-700">Grabando — las barras se mueven con su voz</p>
             <span className="ml-auto text-xs font-medium text-red-600">Micrófono activo</span>
           </div>
           <div className="voice-wave" aria-hidden="true">
             {levels.map((level, index) => (
               <span
                 key={index}
-                style={{ height: `${Math.round(10 + level * 54)}px` }}
+                className={level > 0.55 ? 'is-loud' : undefined}
+                style={{ height: `${Math.round(12 + level * 72)}px` }}
               />
             ))}
           </div>

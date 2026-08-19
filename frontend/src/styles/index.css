@@ -113,16 +113,22 @@
     align-items: flex-end;
     justify-content: center;
     gap: 3px;
-    height: 68px;
+    height: 92px;
+    padding: 4px 0;
   }
 
   .voice-wave span {
-    width: 4px;
-    min-height: 6px;
+    width: 5px;
+    min-height: 8px;
     border-radius: 99px;
-    background: #0d9488;
-    box-shadow: 0 0 8px rgba(13, 148, 136, 0.45);
-    transition: height 70ms linear;
+    background: linear-gradient(to top, #0f766e, #2dd4bf);
+    box-shadow: 0 0 10px rgba(45, 212, 191, 0.45);
+    transition: height 55ms linear, background-color 120ms ease;
+  }
+
+  .voice-wave span.is-loud {
+    background: linear-gradient(to top, #b91c1c, #f87171);
+    box-shadow: 0 0 12px rgba(248, 113, 113, 0.55);
   }
 
   .voice-record-btn.is-recording {
@@ -328,8 +334,13 @@ html.dark section {
 }
 
 .dark .voice-wave span {
-  background: #2dd4bf;
-  box-shadow: 0 0 10px rgba(45, 212, 191, 0.7);
+  background: linear-gradient(to top, #0f766e, #5eead4);
+  box-shadow: 0 0 12px rgba(45, 212, 191, 0.75);
+}
+
+.dark .voice-wave span.is-loud {
+  background: linear-gradient(to top, #991b1b, #fca5a5);
+  box-shadow: 0 0 12px rgba(252, 165, 165, 0.7);
 }
 
 /* Modal / overlay backgrounds */

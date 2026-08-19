@@ -140,3 +140,18 @@ export function isMobile(): boolean {
 export function isRecordingSupported(): boolean {
   return typeof navigator.mediaDevices !== 'undefined' && typeof navigator.mediaDevices.getUserMedia === 'function' && typeof MediaRecorder !== 'undefined';
 }
+
+/** Fecha (YYYY-MM-DD) y hora (HH:mm) en zona America/Mexico_City. */
+export function stampMexicoNow(): { fecha: string; hora: string } {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Mexico_City',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(new Date());
+  const get = (type: string) => parts.find((part) => part.type === type)?.value ?? '';
+  return { fecha: `${get('year')}-${get('month')}-${get('day')}`, hora: `${get('hour')}:${get('minute')}` };
+}

@@ -9,6 +9,7 @@ import type { ConsultaMedica, DictamenNom004, NotaAclaracion, NotaClinica, Recet
 import PhysicianIdentityBar from './PhysicianIdentityBar';
 import VoiceDictationPanel from './VoiceDictationPanel';
 import NoteEditor from './NoteEditor';
+import { stampMexicoNow } from '../../utils';
 
 const EMPTY_NOTA: NotaClinica = {
   nombre_paciente: '', edad: '', sexo: '', domicilio: '', ocupacion: '',
@@ -63,6 +64,11 @@ export default function ConsultaWorkspace() {
   const hydrate = (row: ConsultaMedica) => {
     setConsulta(row);
     const incoming: NotaClinica = { ...EMPTY_NOTA, ...(row.nota_estructurada ?? {}) };
+    if (!consultaCerrada(row.estado)) {
+      const stamp = stampMexicoNow();
+      if (!incoming.fecha) incoming.fecha = stamp.fecha;
+      if (!incoming.hora) incoming.hora = stamp.hora;
+    }
     if (!consultaCerrada(row.estado) && user) {
       incoming.medico_nombre = user.full_name || incoming.medico_nombre;
       incoming.medico_cedula = user.credentials || incoming.medico_cedula;
@@ -114,6 +120,21 @@ export default function ConsultaWorkspace() {
     consultaId: id,
   };
 
+  const stampConsultaAhora = () => {
+    const stamp = stampMexicoNow();
+    setNota((n) => ({ ...n, fecha: stamp.fecha, hora: stamp.hora }));
+  };
+
+  const aplicarNotaGenerada = (incoming: NotaClinica | undefined, prevFecha: string, prevHora: string) => {
+    if (!incoming) return;
+    setNota({
+      ...EMPTY_NOTA,
+      ...incoming,
+      fecha: prevFecha || incoming.fecha,
+      hora: prevHora || incoming.hora,
+    });
+  };
+
   const handleGenerarDesdeTexto = async () => {
     if (!id || !pacienteId || locked) return;
     if (dictado.trim().length < 20) {
@@ -123,9 +144,13 @@ export default function ConsultaWorkspace() {
     setGenerating(true);
     setError('');
     try {
+      const stamp = nota.fecha && nota.hora ? { fecha: nota.fecha, hora: nota.hora } : stampMexicoNow();
+      if (!nota.fecha || !nota.hora) {
+        setNota((n) => ({ ...n, fecha: stamp.fecha, hora: stamp.hora }));
+      }
       const result = await api.procesarConsultaTexto(dictado, pacienteId, consulta?.especialidad || 'medicina_general', extras);
       hydrate(result.consulta);
-      if (result.nota) setNota({ ...EMPTY_NOTA, ...result.nota });
+      aplicarNotaGenerada(result.nota, stamp.fecha, stamp.hora);
       if (result.receta) setReceta({ ...EMPTY_RECETA, ...result.receta, medicamentos: result.receta.medicamentos ?? [] });
       if (result.transcripcion) setDictado(result.transcripcion);
       setGuardia(result.guardia_legal);
@@ -142,9 +167,13 @@ export default function ConsultaWorkspace() {
     setGenerating(true);
     setError('');
     try {
+      const stamp = nota.fecha && nota.hora ? { fecha: nota.fecha, hora: nota.hora } : stampMexicoNow();
+      if (!nota.fecha || !nota.hora) {
+        setNota((n) => ({ ...n, fecha: stamp.fecha, hora: stamp.hora }));
+      }
       const result = await api.procesarConsultaAudio(audioFile, pacienteId, consulta?.especialidad || 'medicina_general', extras);
       hydrate(result.consulta);
-      if (result.nota) setNota({ ...EMPTY_NOTA, ...result.nota });
+      aplicarNotaGenerada(result.nota, stamp.fecha, stamp.hora);
       if (result.receta) setReceta({ ...EMPTY_RECETA, ...result.receta, medicamentos: result.receta.medicamentos ?? [] });
       if (result.transcripcion) setDictado(result.transcripcion);
       setGuardia(result.guardia_legal);
@@ -224,6 +253,7 @@ export default function ConsultaWorkspace() {
     const text = [
       'NOTA CLÍNICA — NOM-004-SSA3-2012',
       selloActual,
+      `Fecha: ${nota.fecha}  Hora: ${nota.hora}`,
       `Paciente: ${nota.nombre_paciente} · ${nota.edad} · ${nota.sexo}`,
       `Motivo: ${nota.motivo_consulta}`,
       `Diagnóstico: ${nota.diagnostico}`,
@@ -303,17 +333,21 @@ export default function ConsultaWorkspace() {
             </div>
           )}
 
-          <PhysicianIdentityBar user={user} />
+          <PhysicianIdentityBar user={user} fecha={nota.fecha} hora={nota.hora} />
 
           {!locked && (
             <VoiceDictationPanel
               dictado={dictado}
               onDictado={setDictado}
               audioFile={audioFile}
-              onAudioFile={setAudioFile}
+              onAudioFile={(file) => {
+                setAudioFile(file);
+                if (file) stampConsultaAhora();
+              }}
               generating={generating}
               onGenerateText={handleGenerarDesdeTexto}
               onGenerateAudio={handleGenerarDesdeAudio}
+              onRecordingStart={stampConsultaAhora}
             />
           )}
 

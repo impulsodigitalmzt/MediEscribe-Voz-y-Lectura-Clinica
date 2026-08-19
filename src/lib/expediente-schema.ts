@@ -223,6 +223,7 @@ export async function ensureExpedienteSchema(sql: Sql): Promise<void> {
   } // !has_pacientes
 
   await ensureNotasAclaracion(sql);
+  await migrarConsultasMedicasLegacy(sql);
 
   if (existing.has_users && existing.has_pacientes) {
     schemaReady = true;
@@ -501,4 +502,197 @@ async function ensureNotasAclaracion(sql: Sql): Promise<void> {
   } catch {
     /* sin tabla de migraciones no bloquea la consulta */
   }
+}
+
+function textoJson(row: Record<string, unknown>, ...keys: string[]): string {
+  for (const key of keys) {
+    const value = row[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return "";
+}
+
+function asJsonValue(value: unknown, fallback: unknown): unknown {
+  if (value && typeof value === "object") return value;
+  if (typeof value === "string" && value.trim()) {
+    try {
+      return JSON.parse(value) as unknown;
+    } catch {
+      return fallback;
+    }
+  }
+  return fallback;
+}
+
+function partirNombreLegado(completo: string): { nombre: string; apellidoPaterno: string; apellidoMaterno: string } {
+  const partes = completo.trim().split(/\s+/).filter(Boolean);
+  if (partes.length === 0) return { nombre: "Paciente", apellidoPaterno: "Legado", apellidoMaterno: "" };
+  if (partes.length === 1) return { nombre: partes[0], apellidoPaterno: "SIN APELLIDO", apellidoMaterno: "" };
+  if (partes.length === 2) return { nombre: partes[0], apellidoPaterno: partes[1], apellidoMaterno: "" };
+  return {
+    nombre: partes[0],
+    apellidoPaterno: partes.slice(1, -1).join(" "),
+    apellidoMaterno: partes[partes.length - 1],
+  };
+}
+
+/**
+ * La tabla oficial NOM-004 es `consultas` (UUID + paciente_id + nota estructurada).
+ * `consultas_medicas` es el modelo suelto anterior (id serial, nombre en texto).
+ * Se absorbe y se elimina para que lectura y guardado usen el mismo sitio.
+ */
+async function migrarConsultasMedicasLegacy(sql: Sql): Promise<void> {
+  try {
+    await migrarConsultasMedicasLegacyInner(sql);
+  } catch (error) {
+    console.error(
+      JSON.stringify({
+        event: "migrate_consultas_medicas_failed",
+        message: error instanceof Error ? error.message : "unknown",
+      })
+    );
+  }
+}
+
+async function migrarConsultasMedicasLegacyInner(sql: Sql): Promise<void> {
+  const flags = await sql<{ has_legacy: boolean; is_view: boolean }[]>`
+    SELECT
+      to_regclass('public.consultas_medicas') IS NOT NULL AS has_legacy,
+      EXISTS (
+        SELECT 1 FROM information_schema.views
+        WHERE table_schema = 'public' AND table_name = 'consultas_medicas'
+      ) AS is_view
+  `;
+  const meta = flags[0];
+  if (!meta?.has_legacy || meta.is_view) return;
+
+  await sql`ALTER TABLE consultas ADD COLUMN IF NOT EXISTS origen_legado TEXT`;
+  await sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_consultas_origen_legado
+    ON consultas (origen_legado)
+    WHERE origen_legado IS NOT NULL
+  `;
+
+  const legacy = await sql<{ row: Record<string, unknown> }[]>`
+    SELECT to_jsonb(cm) AS row FROM consultas_medicas cm
+  `;
+  let migrated = 0;
+  let failed = 0;
+
+  for (const item of legacy) {
+    try {
+    const row = item.row ?? {};
+    const origen = `consultas_medicas:${String(row.id ?? "")}`;
+    if (!row.id) continue;
+    const already = await sql<{ id: string }[]>`
+      SELECT id FROM consultas WHERE origen_legado = ${origen} LIMIT 1
+    `;
+    if (already[0]) continue;
+
+    const nombreCompleto = textoJson(row, "paciente_nombre", "nombre_paciente", "paciente");
+    const partes = partirNombreLegado(nombreCompleto || "Paciente Legado");
+    const nombreNorm = `${partes.nombre} ${partes.apellidoPaterno} ${partes.apellidoMaterno}`.replace(/\s+/g, " ").trim();
+
+    let pacienteId = "";
+    const encontrados = await sql<{ id: string }[]>`
+      SELECT id
+      FROM pacientes
+      WHERE lower(btrim(concat_ws(' ', nombre, apellido_paterno, nullif(apellido_materno, '')))) = lower(${nombreNorm})
+      LIMIT 1
+    `;
+    if (encontrados[0]) {
+      pacienteId = String(encontrados[0].id);
+    } else {
+      const expediente = `LEG-CM-${String(row.id).replace(/[^a-zA-Z0-9]/g, "").slice(0, 12)}`;
+      const created = await sql<{ id: string }[]>`
+        INSERT INTO pacientes (
+          numero_expediente, nombre, apellido_paterno, apellido_materno, fecha_nacimiento
+        ) VALUES (
+          ${expediente},
+          ${partes.nombre},
+          ${partes.apellidoPaterno},
+          ${partes.apellidoMaterno},
+          DATE '1900-01-01'
+        )
+        ON CONFLICT (numero_expediente) DO UPDATE SET updated_at = NOW()
+        RETURNING id
+      `;
+      pacienteId = String(created[0]?.id ?? "");
+    }
+    if (!pacienteId) continue;
+
+    const fechaRaw = row.fecha_hora ?? row.fecha ?? row.created_at;
+    const parsedFecha = fechaRaw ? new Date(String(fechaRaw)) : new Date();
+    const fechaHora = Number.isNaN(parsedFecha.getTime()) ? new Date() : parsedFecha;
+    const nota = asJsonValue(row.nota_estructurada, {});
+    const receta = asJsonValue(row.receta_paciente_nativo ?? row.receta, {});
+    const tratamiento = asJsonValue(row.tratamiento, []);
+    const estadoRaw = textoJson(row, "estado").toLowerCase();
+    const estado = estadoRaw === "locked" || estadoRaw === "finalizada" ? estadoRaw : "borrador";
+
+    await sql`
+      INSERT INTO consultas (
+        paciente_id, fecha_hora, motivo_consulta, exploracion_fisica, diagnostico, tratamiento,
+        notas_evolucion, padecimiento_actual, plan, resumen, transcripcion, nota_estructurada,
+        receta_paciente_nativo, idioma, especialidad, modelo_whisper, modelo_llm, nombre_archivo,
+        estado, medico_nombre, medico_cedula, origen_legado
+      ) VALUES (
+        ${pacienteId}::uuid,
+        ${fechaHora.toISOString()}::timestamptz,
+        ${textoJson(row, "motivo_consulta")},
+        ${textoJson(row, "exploracion_fisica")},
+        ${textoJson(row, "diagnostico")},
+        ${sql.json(tratamiento)},
+        ${textoJson(row, "notas_evolucion")},
+        ${textoJson(row, "padecimiento_actual", "padecimiento")},
+        ${textoJson(row, "plan")},
+        ${textoJson(row, "resumen")},
+        ${textoJson(row, "transcripcion")},
+        ${sql.json(nota)},
+        ${sql.json(receta)},
+        ${textoJson(row, "idioma") || "es"},
+        ${textoJson(row, "especialidad")},
+        ${textoJson(row, "modelo_whisper")},
+        ${textoJson(row, "modelo_llm")},
+        ${textoJson(row, "nombre_archivo")},
+        ${estado},
+        ${textoJson(row, "medico_nombre")},
+        ${textoJson(row, "medico_cedula")},
+        ${origen}
+      )
+    `;
+    migrated += 1;
+    } catch (error) {
+      failed += 1;
+      console.error(
+        JSON.stringify({
+          event: "migrate_consultas_medicas_row_failed",
+          message: error instanceof Error ? error.message : "unknown",
+        })
+      );
+    }
+  }
+
+  if (failed === 0) {
+    await sql`DROP TABLE IF EXISTS consultas_medicas CASCADE`;
+  }
+  try {
+    await sql`
+      INSERT INTO schema_migrations (name)
+      VALUES ('2026-08-19-unificar-consultas')
+      ON CONFLICT (name) DO NOTHING
+    `;
+  } catch {
+    /* ignore */
+  }
+  console.log(
+    JSON.stringify({
+      event: "migrated_consultas_medicas",
+      rowsRead: legacy.length,
+      rowsInserted: migrated,
+      rowsFailed: failed,
+      dropped: failed === 0,
+      officialTable: "consultas",
+    })
+  );
 }

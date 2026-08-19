@@ -379,16 +379,7 @@ CREATE INDEX IF NOT EXISTS ix_consultas_estado_fecha
   ON consultas (estado, fecha_hora DESC);
 
 -- -----------------------------------------------------------------------------
--- Migración opcional desde el modelo aislado consultas_medicas (notas sueltas).
--- No se ejecuta automáticamente: los nombres sueltos no bastan para un
--- expediente NOM-004. Revisar homónimos a mano antes de correr este bloque.
+-- Tabla oficial de episodios: consultas (NO usar consultas_medicas).
+-- El legado consultas_medicas se absorbe con:
+--   db/migrations/2026-08-19-unificar-consultas.sql
 -- -----------------------------------------------------------------------------
--- INSERT INTO pacientes (numero_expediente, nombre, apellido_paterno, apellido_materno, fecha_nacimiento)
--- SELECT
---   'LEG-' || lpad(min(id)::text, 8, '0'),
---   split_part(min(paciente_nombre), ' ', 1),
---   COALESCE(nullif(split_part(min(paciente_nombre), ' ', 2), ''), 'SIN APELLIDO'),
---   COALESCE(nullif(split_part(min(paciente_nombre), ' ', 3), ''), ''),
---   DATE '1900-01-01'
--- FROM consultas_medicas
--- GROUP BY lower(btrim(paciente_nombre));

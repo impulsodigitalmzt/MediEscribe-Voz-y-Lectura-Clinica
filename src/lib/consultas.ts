@@ -179,6 +179,10 @@ function parseRecetaRow(value: ConsultaMedicaRow["receta_paciente_nativo"]): Rec
   return value;
 }
 
+/**
+ * Episodios clínicos. Tabla oficial: `consultas` (NOM-004).
+ * No usar `consultas_medicas` (legado absorbido al arrancar el Worker).
+ */
 export async function insertConsulta(
   sql: Sql,
   input: {

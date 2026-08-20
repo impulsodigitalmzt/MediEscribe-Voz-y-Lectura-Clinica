@@ -45,6 +45,7 @@ export default function NoteEditor({ nota, receta, locked, sello, onNota, onRece
         <Area label="Diagnóstico" value={nota.diagnostico} onChange={(v) => setField('diagnostico', v)} locked={locked} />
         <Area label="Pronóstico" value={nota.pronostico} onChange={(v) => setField('pronostico', v)} locked={locked} />
         <Area label="Plan terapéutico" value={nota.plan} onChange={(v) => setField('plan', v)} locked={locked} />
+        <Area label="Medicamentos" value={nota.medicamentos} onChange={(v) => setField('medicamentos', v)} locked={locked} />
 
         <Section title="Tratamiento estructurado">
           {(nota.tratamiento ?? []).map((row, index) => (

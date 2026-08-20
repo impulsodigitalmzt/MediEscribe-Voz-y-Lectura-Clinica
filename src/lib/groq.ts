@@ -52,7 +52,7 @@ function groqKeyMeta(env: Env): Record<string, unknown> {
     hasGroqApiKey: Boolean(key),
     groqApiKeyLength: key.length,
     groqApiKeyPrefix: key ? `${key.slice(0, 4)}…` : "",
-    groqModel: env.GROQ_MODEL || "llama-3.1-8b-instant",
+    groqModel: env.GROQ_MODEL || "llama-3.3-70b-versatile",
   };
 }
 
@@ -74,15 +74,16 @@ export async function groqChatJson(
   if (!env.GROQ_API_KEY) {
     logGroq("groq_chat_missing_key", {
       ...groqKeyMeta(env),
-      detail: "GROQ_API_KEY no está en el Worker. La nota caerá a fallback local y puede copiar texto crudo.",
+      detail: "GROQ_API_KEY no está en el Worker. Sin esta clave no hay llamada al modelo.",
     });
     throw new AppError(503, "GROQ_API_KEY no está configurada.", "GROQ_NOT_CONFIGURED");
   }
 
-  const model = env.GROQ_MODEL || "llama-3.1-8b-instant";
+  const model = env.GROQ_MODEL || "llama-3.3-70b-versatile";
   let maxTokens = maxTokensForModel(model, options?.maxTokens);
   let payload = messages;
   const userChars = messages.find((m) => m.role === "user")?.content.length ?? 0;
+  const groqUrl = "https://api.groq.com/openai/v1/chat/completions";
 
   logGroq("groq_chat_request", {
     ...groqKeyMeta(env),
@@ -92,7 +93,17 @@ export async function groqChatJson(
   });
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+    console.log("[IA] ANTES de la llamada al modelo", {
+      provider: "groq",
+      url: groqUrl,
+      model,
+      attempt,
+      maxTokens,
+      userChars,
+      messageCount: payload.length,
+    });
+
+    const response = await fetch(groqUrl, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${env.GROQ_API_KEY}`,
@@ -108,6 +119,14 @@ export async function groqChatJson(
     });
 
     const errText = response.ok ? "" : await response.text();
+    console.log("[IA] DESPUÉS de la llamada al modelo", {
+      provider: "groq",
+      model,
+      attempt,
+      httpStatus: response.status,
+      ok: response.ok,
+      errorPreview: errText ? errText.slice(0, 400) : null,
+    });
     if (!response.ok) {
       const authFail = response.status === 401 || response.status === 403;
       logGroq(authFail ? "groq_chat_auth_failed" : "groq_chat_failed", {
@@ -138,6 +157,13 @@ export async function groqChatJson(
       error?: { message?: string; type?: string };
     };
     const content = data.choices?.[0]?.message?.content ?? "";
+    console.log("[IA] DESPUÉS de la llamada al modelo (contenido)", {
+      provider: "groq",
+      model,
+      attempt,
+      contentChars: content.length,
+      contentPreview: content.slice(0, 600),
+    });
     logGroq("groq_chat_raw_content", {
       ...groqKeyMeta(env),
       httpStatus: response.status,
@@ -158,7 +184,18 @@ export async function groqChatJson(
         padecimientoChars: typeof nota?.padecimiento_actual === "string" ? nota.padecimiento_actual.length : 0,
         diagnosticoChars: typeof nota?.diagnostico === "string" ? nota.diagnostico.length : 0,
         exploracionChars: typeof nota?.exploracion_fisica === "string" ? nota.exploracion_fisica.length : 0,
-        planChars: typeof nota?.plan === "string" ? nota.plan.length : 0,
+        planChars:
+          typeof nota?.plan_tratamiento === "string"
+            ? nota.plan_tratamiento.length
+            : typeof nota?.plan === "string"
+              ? nota.plan.length
+              : 0,
+        medicamentosChars:
+          typeof nota?.medicamentos === "string"
+            ? nota.medicamentos.length
+            : Array.isArray(nota?.medicamentos)
+              ? nota.medicamentos.length
+              : 0,
         motivoPreview: typeof nota?.motivo_consulta === "string" ? nota.motivo_consulta.slice(0, 220) : null,
       });
       return parsed;

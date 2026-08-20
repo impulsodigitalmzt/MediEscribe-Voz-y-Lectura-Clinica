@@ -430,7 +430,7 @@ export async function procesarConsultaDesdeTexto(
         idioma,
         especialidad: input.especialidad,
         modeloWhisper: env.GROQ_WHISPER_MODEL || "whisper-large-v3",
-        modeloLlm: env.GROQ_MODEL || "openai/gpt-oss-20b",
+        modeloLlm: env.GROQ_MODEL || "llama-3.3-70b-versatile",
         nombreArchivo: input.nombreArchivo ?? null,
       });
     }
@@ -443,7 +443,7 @@ export async function procesarConsultaDesdeTexto(
       idioma,
       especialidad: input.especialidad,
       modeloWhisper: env.GROQ_WHISPER_MODEL || "whisper-large-v3",
-      modeloLlm: env.GROQ_MODEL || "openai/gpt-oss-20b",
+      modeloLlm: env.GROQ_MODEL || "llama-3.3-70b-versatile",
       nombreArchivo: input.nombreArchivo ?? null,
     });
   });

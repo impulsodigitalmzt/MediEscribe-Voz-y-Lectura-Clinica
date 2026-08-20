@@ -10,6 +10,7 @@ import PhysicianIdentityBar from './PhysicianIdentityBar';
 import VoiceDictationPanel from './VoiceDictationPanel';
 import NoteEditor from './NoteEditor';
 import { stampMexicoNow } from '../../utils';
+import { mapearNotaDesdeIA } from '../../lib/mapearNotaClinica';
 
 const EMPTY_NOTA: NotaClinica = {
   nombre_paciente: '', edad: '', sexo: '', domicilio: '', ocupacion: '',
@@ -63,7 +64,7 @@ export default function ConsultaWorkspace() {
 
   const hydrate = (row: ConsultaMedica) => {
     setConsulta(row);
-    const incoming: NotaClinica = { ...EMPTY_NOTA, ...(row.nota_estructurada ?? {}) };
+    const incoming = mapearNotaDesdeIA(row.nota_estructurada ?? {}, EMPTY_NOTA);
     if (!consultaCerrada(row.estado)) {
       const stamp = stampMexicoNow();
       if (!incoming.fecha) incoming.fecha = stamp.fecha;
@@ -127,9 +128,8 @@ export default function ConsultaWorkspace() {
 
   const aplicarNotaGenerada = (incoming: NotaClinica | undefined, prevFecha: string, prevHora: string) => {
     if (!incoming) return;
-    setNota({
+    const mapped = mapearNotaDesdeIA(incoming, {
       ...EMPTY_NOTA,
-      ...incoming,
       fecha: prevFecha || incoming.fecha,
       hora: prevHora || incoming.hora,
       medico_nombre: user?.full_name || incoming.medico_nombre,
@@ -141,6 +141,17 @@ export default function ConsultaWorkspace() {
         user?.specialty || incoming.medico_especialidad
       ),
     });
+    mapped.fecha = prevFecha || mapped.fecha;
+    mapped.hora = prevHora || mapped.hora;
+    mapped.medico_nombre = user?.full_name || mapped.medico_nombre;
+    mapped.medico_cedula = user?.credentials || mapped.medico_cedula;
+    mapped.medico_especialidad = user?.specialty || mapped.medico_especialidad;
+    mapped.sello_responsable = selloDesdeSesion(
+      mapped.medico_nombre,
+      mapped.medico_cedula,
+      mapped.medico_especialidad
+    );
+    setNota(mapped);
   };
 
   const handleGenerarDesdeTexto = async (textoCaja?: string) => {
@@ -184,7 +195,7 @@ export default function ConsultaWorkspace() {
       if (result.receta) setReceta({ ...EMPTY_RECETA, ...result.receta, medicamentos: result.receta.medicamentos ?? [] });
       setDictado(result.transcripcion || texto);
       setGuardia(result.guardia_legal);
-      setSavedMsg('Nota redactada a partir de la transcripción. Revise los campos NOM-004 y guarde.');
+      setSavedMsg('Nota estructurada por IA (SOAP / NOM-004). Revise cada campo y guarde.');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'No se pudo generar la nota.');
     } finally {
@@ -231,7 +242,7 @@ export default function ConsultaWorkspace() {
       if (result.receta) setReceta({ ...EMPTY_RECETA, ...result.receta, medicamentos: result.receta.medicamentos ?? [] });
       if (result.transcripcion) setDictado(result.transcripcion);
       setGuardia(result.guardia_legal);
-      setSavedMsg('Audio transcrito. Revise la nota y guarde.');
+      setSavedMsg('Audio transcrito y nota estructurada por IA. Revise los campos NOM-004 y guarde.');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'No se pudo procesar el audio.');
     } finally {
@@ -246,7 +257,7 @@ export default function ConsultaWorkspace() {
     try {
       const result = await api.guardarConsultaNota(id, nota, receta);
       setConsulta(result.consulta);
-      if (result.nota) setNota({ ...EMPTY_NOTA, ...result.nota });
+      if (result.nota) setNota(mapearNotaDesdeIA(result.nota, EMPTY_NOTA));
       if (result.receta) {
         setReceta({ ...EMPTY_RECETA, ...result.receta, medicamentos: result.receta.medicamentos ?? [] });
       }
@@ -266,7 +277,7 @@ export default function ConsultaWorkspace() {
     try {
       const result = await api.finalizarConsulta(id, nota, receta);
       setConsulta(result.consulta);
-      if (result.nota) setNota({ ...EMPTY_NOTA, ...result.nota });
+      if (result.nota) setNota(mapearNotaDesdeIA(result.nota, EMPTY_NOTA));
       if (result.receta) {
         setReceta({ ...EMPTY_RECETA, ...result.receta, medicamentos: result.receta.medicamentos ?? [] });
       }

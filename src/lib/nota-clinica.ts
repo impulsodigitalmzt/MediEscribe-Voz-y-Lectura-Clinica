@@ -1,6 +1,5 @@
 import { clipTranscript } from "./audio";
 import { groqChatJson, normalizeLanguageCode } from "./groq";
-import { extractClinicalEntities } from "./nlp";
 import { validarNotaNom004 } from "./guardia-legal";
 import type {
   DatosMedico,
@@ -43,36 +42,33 @@ const IDIOMA_NOMBRE: Record<string, string> = {
   sw: "Kiswahili",
 };
 
-const SYSTEM_PROMPT = `Eres el motor de documentación clínica de MediEscribe.
-Analizas la transcripción de UNA consulta y extraes datos hacia campos NOM-004-SSA3-2012.
+const SYSTEM_PROMPT = `Actúa como un médico experto. Recibe la transcripción de una consulta y estructúrala en un objeto JSON con los siguientes campos obligatorios: motivo_consulta, padecimiento_actual, interrogatorio, exploracion_fisica, diagnostico (incluyendo CIE-10 si es posible), plan_tratamiento, medicamentos y pronostico. El texto debe estar redactado con terminología médica profesional y alineado a la norma NOM-004-SSA3.
 
-SALIDA: un solo JSON con:
+SALIDA: un solo JSON válido (sin markdown) con:
 - idioma_detectado (ISO 639-1)
-- nota_medica_espanol (objeto, SIEMPRE español clínico)
+- nota_medica_espanol (objeto, SIEMPRE español clínico profesional)
 - receta_paciente_nativo (objeto, idioma del paciente)
+
+nota_medica_espanol DEBE incluir estas claves:
+- motivo_consulta: razón breve de la visita (una o dos frases). NUNCA el relato completo.
+- padecimiento_actual: historia de la enfermedad actual (inicio, cronología, síntomas, factores, evolución). Distinto del motivo.
+- interrogatorio: interrogatorio dirigido / revisión por sistemas. Si no hubo, indica que no se documentó.
+- exploracion_fisica: signos vitales y hallazgos. Si no se exploró, indícalo de forma profesional.
+- diagnostico: impresión diagnóstica con código CIE-10 cuando sea posible, p. ej. "Cefalea tensional (CIE-10: G44.2)".
+- plan_tratamiento: plan terapéutico, estudios, medidas no farmacológicas y seguimiento.
+- medicamentos: fármacos indicados o que el paciente ya toma, con dosis, vía y periodicidad si se mencionaron.
+- pronostico: pronóstico clínico (bueno, reservado, etc.) según lo dicho o la impresión razonable del cuadro descrito.
+- tratamiento: array opcional {medicamento, dosis, via, periodicidad}.
+- resumen: 2-4 oraciones (motivo, dx, plan). NO la transcripción cruda.
 
 PROHIBIDO:
 - Copiar la transcripción completa en cualquier campo.
 - Pegar el mismo párrafo en dos o más campos.
-- Inventar datos no dichos.
-- Llenar un campo vacío con todo el relato "por si acaso".
-
-CÓMO LLENAR nota_medica_espanol (cada campo = SOLO su contenido, 1 a 4 oraciones):
-- motivo_consulta: razón breve de la visita (una frase). NO el relato completo.
-- padecimiento_actual: historia de la enfermedad actual (inicio, tiempo, síntomas, evolución). Distinto del motivo.
-- interrogatorio: respuestas dirigidas, ROS. Si no hubo, "${NO_MENCIONADO}".
-- exploracion_fisica: signos vitales y hallazgos. Si no se exploró, "${NO_MENCIONADO}".
-- diagnostico: impresión diagnóstica breve. NO copies el padecimiento.
-- pronostico: solo si se dijo. Si no, "${NO_MENCIONADO}".
-- plan: indicaciones (estudios, medidas, cita).
-- tratamiento: array {medicamento, dosis, via, periodicidad}. [] si no hay fármacos.
-- medicamentos: fármacos que YA toma el paciente (antecedente), no el plan de hoy.
-- alergias, antecedentes_*: solo lo mencionado.
-- resumen: 2-4 oraciones (id, motivo, dx, plan). NO la transcripción cruda.
-- Si un dato no se mencionó: exactamente "${NO_MENCIONADO}".
+- Inventar datos clínicos no dichos (el CIE-10 sí puede inferirse del diagnóstico verbalizado).
+- Devolver texto plano. Solo JSON.
 
 EJEMPLO DE ERROR: motivo_consulta = padecimiento_actual = diagnostico = todo el dictado.
-EJEMPLO CORRECTO: motivo_consulta "Cefalea de 3 días"; padecimiento_actual "Inicio gradual, 7/10, sin fiebre"; diagnostico "Cefalea tensional"; exploracion_fisica "${NO_MENCIONADO}" si no se exploró.
+EJEMPLO CORRECTO: motivo_consulta "Cefalea de 3 días"; padecimiento_actual "Inicio gradual, 7/10, sin fiebre"; diagnostico "Cefalea tensional (CIE-10: G44.2)"; exploracion_fisica "No se documentó exploración física en la transcripción." si no se exploró.
 
 receta_paciente_nativo: indicaciones claras para el paciente, no copies la nota.`;
 
@@ -85,6 +81,7 @@ const CAMPOS_NARRATIVOS = [
   "diagnostico",
   "pronostico",
   "plan",
+  "medicamentos",
   "notas_evolucion",
   "resumen",
 ] as const;
@@ -152,104 +149,18 @@ function esCopiaDeTranscripcion(campo: string, transcripcion: string): boolean {
   const a = normalizarComparacion(campo);
   const b = normalizarComparacion(transcripcion);
   if (!a || a === normalizarComparacion(NO_MENCIONADO)) return false;
-  if (transcripcion.trim().length > 80 && campo.trim().length >= transcripcion.trim().length * 0.5) {
+  if (a === b) return true;
+  if (transcripcion.trim().length > 80 && campo.trim().length >= transcripcion.trim().length * 0.8) {
     return true;
   }
-  if (a.length < 48 || b.length < 48) return false;
-  if (a === b) return true;
-  const shorter = a.length <= b.length ? a : b;
-  const longer = a.length <= b.length ? b : a;
-  return longer.includes(shorter) && shorter.length / longer.length >= 0.55;
-}
-
-function recortarFragmento(fragmento: string, transcripcion: string, maxRatio = 0.45): string {
-  const value = fragmento.replace(/\s+/g, " ").trim();
-  if (!value) return "";
-  if (value.length >= transcripcion.trim().length * maxRatio) {
-    return value.slice(0, Math.min(220, Math.floor(transcripcion.length * 0.32))).trim();
-  }
-  return value;
-}
-
-function extraerSeccionesNom004(transcripcion: string): Partial<NotaClinica> {
-  const texto = transcripcion.replace(/\s+/g, " ").trim();
-  if (!texto) return {};
-
-  const buscar = (re: RegExp) => texto.search(re);
-  const iExp = buscar(/exploraci[oó]n\s+f[ií]sica\s*[:\-]?\s*/i);
-  const iDx = buscar(/diagn[oó]stico(?:\s+(?:presuntivo|de|final))?\s*[:\-]?\s*/i);
-  const iPlan = buscar(
-    /\b(?:plan(?:\s+terap[eé]utico)?|tratamiento|se indica|indicar(?:se)?|paracetamol|ibuprofeno|omeprazol|amoxicilina)\b/i
-  );
-
-  const corteCuerpo = [iExp, iDx, iPlan].filter((n) => n >= 0).sort((a, b) => a - b)[0] ?? texto.length;
-  const cuerpo = texto.slice(0, corteCuerpo).trim();
-  const palabras = cuerpo.split(" ").filter(Boolean);
-  const motivoN = Math.min(22, Math.max(8, Math.floor(palabras.length * 0.3)));
-  const motivo = palabras.slice(0, motivoN).join(" ");
-  const padecimiento = palabras.slice(motivoN).join(" ");
-
-  const sliceHasta = (inicio: number, extras: number[]) => {
-    const fin = extras.filter((n) => n > inicio).sort((a, b) => a - b)[0] ?? texto.length;
-    return texto.slice(inicio, fin).trim();
-  };
-
-  let exploracion = "";
-  if (iExp >= 0) {
-    exploracion = sliceHasta(iExp, [iDx, iPlan]).replace(/^exploraci[oó]n\s+f[ií]sica\s*[:\-]?\s*/i, "");
-  }
-  let diagnostico = "";
-  if (iDx >= 0) {
-    diagnostico = sliceHasta(iDx, [iPlan]).replace(
-      /^diagn[oó]stico(?:\s+(?:presuntivo|de|final))?\s*[:\-]?\s*/i,
-      ""
-    );
-    diagnostico = diagnostico.split(/[.]/)[0]?.trim() || diagnostico.slice(0, 160);
-  }
-  let plan = "";
-  if (iPlan >= 0) {
-    plan = texto.slice(iPlan).trim();
-  }
-
-  return {
-    motivo_consulta: recortarFragmento(motivo, texto),
-    padecimiento_actual: recortarFragmento(padecimiento && padecimiento !== motivo ? padecimiento : "", texto),
-    exploracion_fisica: recortarFragmento(exploracion, texto),
-    diagnostico: recortarFragmento(diagnostico, texto, 0.35),
-    plan: recortarFragmento(plan, texto, 0.4),
-  };
+  return false;
 }
 
 function sanitizarNotaContraTranscripcion(nota: NotaClinica, transcripcion: string): NotaClinica {
   const next = { ...nota };
-  const extraido = extraerSeccionesNom004(transcripcion);
-  let copias = 0;
   for (const key of CAMPOS_NARRATIVOS) {
     if (esCopiaDeTranscripcion(next[key], transcripcion)) {
-      copias += 1;
-      const reemplazo = extraido[key];
-      next[key] = typeof reemplazo === "string" && reemplazo.trim() ? reemplazo.trim() : NO_MENCIONADO;
-    }
-  }
-  const valores = CAMPOS_NARRATIVOS.map((key) => normalizarComparacion(next[key])).filter(
-    (value) => value.length > 48 && value !== normalizarComparacion(NO_MENCIONADO)
-  );
-  const duplicadosInternos =
-    valores.length >= 2 && valores.filter((value) => value === valores[0]).length >= 2;
-  if (duplicadosInternos || copias >= 2) {
-    next.motivo_consulta = extraido.motivo_consulta || next.motivo_consulta;
-    next.padecimiento_actual =
-      extraido.padecimiento_actual && extraido.padecimiento_actual !== extraido.motivo_consulta
-        ? extraido.padecimiento_actual
-        : NO_MENCIONADO;
-    next.exploracion_fisica = extraido.exploracion_fisica || NO_MENCIONADO;
-    next.diagnostico = extraido.diagnostico || NO_MENCIONADO;
-    next.plan = extraido.plan || NO_MENCIONADO;
-    next.pronostico = extraido.pronostico || NO_MENCIONADO;
-    next.interrogatorio = NO_MENCIONADO;
-    next.notas_evolucion = NO_MENCIONADO;
-    if (esCopiaDeTranscripcion(next.resumen, transcripcion)) {
-      next.resumen = "";
+      next[key] = NO_MENCIONADO;
     }
   }
   if (!next.resumen || next.resumen === NO_MENCIONADO || esCopiaDeTranscripcion(next.resumen, transcripcion)) {
@@ -262,7 +173,13 @@ function sanitizarNotaContraTranscripcion(nota: NotaClinica, transcripcion: stri
 function objetoNotaDesdeRespuesta(raw: Record<string, unknown>): Record<string, unknown> {
   const nested = asObject(raw.nota_medica_espanol) ?? asObject(raw.nota);
   if (nested) return nested;
-  if (typeof raw.motivo_consulta === "string" || typeof raw.padecimiento_actual === "string") return raw;
+  if (
+    typeof raw.motivo_consulta === "string" ||
+    typeof raw.padecimiento_actual === "string" ||
+    typeof raw.plan_tratamiento === "string"
+  ) {
+    return raw;
+  }
   return {};
 }
 
@@ -387,19 +304,19 @@ export async function redactarNotaClinica(
   contextoExpediente = "",
   idiomaWhisper = ""
 ): Promise<DocumentacionConsulta> {
-  const clipped = clipTranscript(transcripcion, 1200);
-  const entities = extractClinicalEntities(clipped);
+  const clipped = clipTranscript(transcripcion, 3500);
   const conocido =
     pacienteConocido && pacienteConocido !== "Paciente sin identificar" ? pacienteConocido : "";
   const idiomaHint = normalizeLanguageCode(idiomaWhisper) || detectarIdiomaTexto(clipped);
   const nombreNativo = nombreIdioma(idiomaHint || "es");
 
-  try {
-    const raw = await groqChatJson(env, [
-      { role: "system", content: SYSTEM_PROMPT },
-      {
-        role: "user",
-        content: `Especialidad: ${especialidad}
+  const raw = await groqChatJson(env, [
+    { role: "system", content: SYSTEM_PROMPT },
+    {
+      role: "user",
+      content: `Actúa como un médico experto. Recibe la transcripción de una consulta y estructúrala en un objeto JSON con los siguientes campos obligatorios: motivo_consulta, padecimiento_actual, interrogatorio, exploracion_fisica, diagnostico (incluyendo CIE-10 si es posible), plan_tratamiento, medicamentos y pronostico. El texto debe estar redactado con terminología médica profesional y alineado a la norma NOM-004-SSA3.
+
+Especialidad: ${especialidad}
 Idioma de la receta (receta_paciente_nativo e idioma_detectado): ${idiomaHint || "desconocido — detéctalo"} (${nombreNativo})
 ${conocido ? `Nombre del expediente (nombre_paciente): ${conocido}` : "Extrae identificación solo si se dijo."}
 ${datos.sexo ? `Sexo conocido: ${datos.sexo}` : ""}
@@ -408,63 +325,34 @@ ${datos.medicoNombre ? `Médico tratante: ${datos.medicoNombre}` : ""}
 ${datos.medicoCedula ? `Cédula profesional: ${datos.medicoCedula}` : ""}
 ${contextoExpediente ? `\n${contextoExpediente}\n` : ""}
 
-TAREA: analiza la transcripción y DISTRIBUYE cada dato en su campo NOM-004.
-No copies el dictado completo en las casillas. Un campo = un tipo de dato.
-Si no se dijo, usa "${NO_MENCIONADO}".
+No copies el dictado completo en las casillas. Un campo = un tipo de dato clínico.
 
 TRANSCRIPCIÓN:
-${clipped}
-
-JSON con idioma_detectado, nota_medica_espanol y receta_paciente_nativo.`,
-      },
-    ]);
-    const parsed = parseDocumentacionDual(raw, clipped, conocido, datos, idiomaHint);
-    parsed.nota = sanitizarNotaContraTranscripcion(parsed.nota, clipped);
-    parsed.nota = await completarNotaNom004(env, parsed.nota, clipped, contextoExpediente);
-    parsed.nota = sanitizarNotaContraTranscripcion(parsed.nota, clipped);
-    console.log(
-      JSON.stringify({
-        event: "nota_clinica_ok",
-        transcriptChars: clipped.length,
-        motivoChars: parsed.nota.motivo_consulta.length,
-        padecimientoChars: parsed.nota.padecimiento_actual.length,
-        diagnosticoChars: parsed.nota.diagnostico.length,
-        exploracionChars: parsed.nota.exploracion_fisica.length,
-        planChars: parsed.nota.plan.length,
-        motivoEqualsTranscript: parsed.nota.motivo_consulta.trim() === clipped.trim(),
-        padecimientoEqualsTranscript: parsed.nota.padecimiento_actual.trim() === clipped.trim(),
-        motivoPreview: parsed.nota.motivo_consulta.slice(0, 180),
-        diagnosticoPreview: parsed.nota.diagnostico.slice(0, 120),
-      })
-    );
-    return parsed;
-  } catch (error) {
-    const code = error && typeof error === "object" && "code" in error ? String((error as { code?: string }).code) : "";
-    const status = error && typeof error === "object" && "status" in error ? (error as { status?: number }).status : undefined;
-    console.error(
-      JSON.stringify({
-        event: "nota_clinica_fallback",
-        code,
-        status,
-        message: error instanceof Error ? error.message : "unknown",
-        usedLocalFallback: true,
-        transcriptChars: clipped.length,
-        hint:
-          code === "GROQ_NOT_CONFIGURED" || code === "GROQ_AUTH_FAILED"
-            ? "Configure GROQ_API_KEY en el Worker (wrangler secret put GROQ_API_KEY)."
-            : "Groq falló; se usó extractor local NOM-004.",
-      })
-    );
-    const nota = sanitizarNotaContraTranscripcion(
-      fallbackNota(clipped, entities, conocido, datos),
-      clipped
-    );
-    return {
-      nota,
-      receta: recetaDesdeNota(nota, idiomaHint || "es"),
-      idioma_detectado: idiomaHint || "es",
-    };
-  }
+${clipped}`,
+    },
+  ]);
+  const parsed = parseDocumentacionDual(raw, clipped, conocido, datos, idiomaHint);
+  parsed.nota = sanitizarNotaContraTranscripcion(parsed.nota, clipped);
+  parsed.nota = await completarNotaNom004(env, parsed.nota, clipped, contextoExpediente);
+  parsed.nota = sanitizarNotaContraTranscripcion(parsed.nota, clipped);
+  console.log(
+    JSON.stringify({
+      event: "nota_clinica_ok",
+      transcriptChars: clipped.length,
+      motivoChars: parsed.nota.motivo_consulta.length,
+      padecimientoChars: parsed.nota.padecimiento_actual.length,
+      diagnosticoChars: parsed.nota.diagnostico.length,
+      exploracionChars: parsed.nota.exploracion_fisica.length,
+      planChars: parsed.nota.plan.length,
+      medicamentosChars: parsed.nota.medicamentos.length,
+      pronosticoChars: parsed.nota.pronostico.length,
+      motivoEqualsTranscript: parsed.nota.motivo_consulta.trim() === clipped.trim(),
+      padecimientoEqualsTranscript: parsed.nota.padecimiento_actual.trim() === clipped.trim(),
+      motivoPreview: parsed.nota.motivo_consulta.slice(0, 180),
+      diagnosticoPreview: parsed.nota.diagnostico.slice(0, 120),
+    })
+  );
+  return parsed;
 }
 
 export function normalizeNota(
@@ -490,7 +378,10 @@ export function normalizeNota(
   const edad = text("edad", "age");
   const ocupacion = text("ocupacion", "ocupación", "occupation");
   const sello = ahoraMexico();
-  const tratamiento = parseTratamiento(raw.tratamiento);
+  let tratamiento = parseTratamiento(raw.tratamiento);
+  if (tratamiento.length === 0) {
+    tratamiento = parseTratamiento(raw.medicamentos);
+  }
 
   const nota: NotaClinica = {
     nombre_paciente: nombre,
@@ -508,7 +399,7 @@ export function normalizeNota(
     interrogatorio: text("interrogatorio"),
     antecedentes_personales: text("antecedentes_personales"),
     antecedentes_quirurgicos: text("antecedentes_quirurgicos"),
-    medicamentos: text("medicamentos"),
+    medicamentos: textoMedicamentos(raw),
     alergias: text("alergias"),
     antecedentes_familiares: text("antecedentes_familiares"),
     antecedentes_sociales: text("antecedentes_sociales"),
@@ -516,9 +407,9 @@ export function normalizeNota(
     estudios: text("estudios"),
     diagnostico_presuntivo: text("diagnostico_presuntivo"),
     diagnosticos_diferenciales: text("diagnosticos_diferenciales"),
-    diagnostico: text("diagnostico"),
+    diagnostico: textoDiagnostico(raw, text),
     pronostico: text("pronostico", "pronóstico"),
-    plan: text("plan"),
+    plan: text("plan_tratamiento", "plan", "tratamiento_plan"),
     tratamiento,
     seguimiento: text("seguimiento"),
     notas_evolucion: text("notas_evolucion", "evolucion"),
@@ -669,59 +560,40 @@ function parseTratamiento(raw: unknown): IndicacionTerapeutica[] {
       via: asText("via") || asText("vía"),
       periodicidad: asText("periodicidad") || asText("frecuencia"),
     };
-  });
+  }).filter((row) => row.medicamento);
 }
 
-function fallbackNota(
-  transcripcion: string,
-  entities: ReturnType<typeof extractClinicalEntities>,
-  pacienteConocido = "",
-  datos: DatosMedico = {}
-): NotaClinica {
-  const orEmpty = (value: string) => value.trim() || NO_MENCIONADO;
-  const id = extraerIdentificacion(transcripcion);
-  const secciones = extraerSeccionesNom004(transcripcion);
-  const sello = ahoraMexico();
-  const nota: NotaClinica = {
-    nombre_paciente: orEmpty(id.nombre || pacienteConocido),
-    edad: orEmpty(id.edad),
-    sexo: orEmpty(datos.sexo ?? ""),
-    domicilio: orEmpty(datos.domicilio ?? ""),
-    ocupacion: orEmpty(id.ocupacion),
-    fecha: sello.fecha,
-    hora: sello.hora,
-    medico_nombre: orEmpty(datos.medicoNombre ?? ""),
-    medico_cedula: orEmpty(datos.medicoCedula ?? ""),
-    medico_especialidad: orEmpty(datos.medicoEspecialidad ?? ""),
-    motivo_consulta: orEmpty(secciones.motivo_consulta || entities.chief_complaint),
-    padecimiento_actual: orEmpty(secciones.padecimiento_actual || entities.symptoms.join(" ")),
-    interrogatorio: NO_MENCIONADO,
-    antecedentes_personales: NO_MENCIONADO,
-    antecedentes_quirurgicos: orEmpty(entities.procedures.join("\n")),
-    medicamentos: orEmpty(secciones.medicamentos || entities.medications.join("\n")),
-    alergias: orEmpty(secciones.alergias || entities.allergies.join("\n")),
-    antecedentes_familiares: orEmpty(entities.family_history_mentions.join("\n")),
-    antecedentes_sociales: orEmpty(entities.social_history_mentions.join("\n")),
-    exploracion_fisica: orEmpty(secciones.exploracion_fisica || entities.exam_findings.join("\n")),
-    estudios: NO_MENCIONADO,
-    diagnostico_presuntivo: orEmpty(entities.diagnoses.join("\n")),
-    diagnosticos_diferenciales: NO_MENCIONADO,
-    diagnostico: orEmpty(secciones.diagnostico || entities.diagnoses.join("\n")),
-    pronostico: orEmpty(secciones.pronostico || ""),
-    plan: orEmpty(secciones.plan || entities.plan_items.join("\n")),
-    tratamiento: [],
-    seguimiento: orEmpty(entities.follow_up.join("\n")),
-    notas_evolucion: NO_MENCIONADO,
-    resumen: "",
-    campos_inciertos: ["redaccion_ia_no_disponible"],
-    secciones_faltantes: [],
-    sello_responsable: "",
-  };
-  nota.resumen = transcripcion.trim().length < 40
-    ? "Transcripción demasiado breve para redactar un resumen clínico confiable."
-    : buildResumen(nota);
-  nota.secciones_faltantes = TEXT_KEYS.filter((key) => nota[key] === NO_MENCIONADO);
-  return aplicarSelloLegal(nota, datos);
+function textoMedicamentos(raw: Record<string, unknown>): string {
+  const value = raw.medicamentos ?? raw.medicacion ?? raw.tratamiento_farmacologico;
+  if (typeof value === "string" && value.trim()) return value.trim();
+  if (Array.isArray(value)) {
+    const lines = value
+      .map((item) => {
+        if (typeof item === "string") return item.trim();
+        if (item && typeof item === "object") {
+          const row = item as Record<string, unknown>;
+          return [row.medicamento ?? row.nombre, row.dosis, row.via ?? row["vía"], row.periodicidad ?? row.frecuencia]
+            .filter((part) => typeof part === "string" && part.trim())
+            .join(" ");
+        }
+        return "";
+      })
+      .filter(Boolean);
+    if (lines.length) return lines.join("\n");
+  }
+  return NO_MENCIONADO;
+}
+
+function textoDiagnostico(
+  raw: Record<string, unknown>,
+  text: (...keys: string[]) => string
+): string {
+  const diagnostico = text("diagnostico", "diagnóstico");
+  const cie = text("cie10", "cie_10", "codigo_cie10", "codigo_cie_10");
+  if (diagnostico === NO_MENCIONADO) return diagnostico;
+  if (cie === NO_MENCIONADO) return diagnostico;
+  if (/cie-?10/i.test(diagnostico) || diagnostico.includes(cie)) return diagnostico;
+  return `${diagnostico} (CIE-10: ${cie})`;
 }
 
 export function nombreDesdeNota(nota: NotaClinica, fallback: string): string {
@@ -744,12 +616,13 @@ async function completarNotaNom004(
       { role: "system", content: SYSTEM_PROMPT },
       {
         role: "user",
-        content: `Completa SOLO los faltantes NOM-004 con fragmentos ESPECÍFICOS de la transcripción.
-PROHIBIDO pegar la transcripción completa en un campo. Si no hay dato, usa "${NO_MENCIONADO}".
+        content: `Completa SOLO los faltantes NOM-004 con redacción clínica profesional (no copies la transcripción).
+Campos SOAP obligatorios: motivo_consulta, padecimiento_actual, interrogatorio, exploracion_fisica, diagnostico (con CIE-10 si es posible), plan_tratamiento, medicamentos, pronostico.
+Si un dato no está en la transcripción, descríbelo como no documentado. PROHIBIDO pegar el dictado completo.
 Faltantes: ${dictamen.guia.join("; ")}
 ${contextoExpediente ? `\n${contextoExpediente}\n` : ""}
 
-NOTA PRELIMINAR (conserva lo que ya está bien y corto):
+NOTA PRELIMINAR (conserva lo que ya está bien):
 ${JSON.stringify(nota)}
 
 TRANSCRIPCIÓN (solo para extraer frases puntuales):

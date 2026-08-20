@@ -45,6 +45,7 @@ export async function ensureExpedienteSchema(sql: Sql): Promise<void> {
       antecedentes_importantes JSONB NOT NULL DEFAULT '{"alergias":"","cronicos":"","heredo_familiares":"","personales_patologicos":"","personales_no_patologicos":""}'::jsonb,
       consentimiento_privacidad_aceptado BOOLEAN NOT NULL DEFAULT false,
       consentimiento_privacidad_en TIMESTAMPTZ,
+      medico_id UUID,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
@@ -100,6 +101,12 @@ export async function ensureExpedienteSchema(sql: Sql): Promise<void> {
       estado TEXT NOT NULL DEFAULT 'borrador',
       medico_nombre TEXT,
       medico_cedula TEXT,
+      medico_id UUID,
+      consentimiento_informado_aceptado BOOLEAN NOT NULL DEFAULT false,
+      consentimiento_informado_en TIMESTAMPTZ,
+      consentimiento_informado_titular TEXT NOT NULL DEFAULT '',
+      consentimiento_ia_aceptado BOOLEAN NOT NULL DEFAULT false,
+      consentimiento_version TEXT NOT NULL DEFAULT '',
       finalizada_en TIMESTAMPTZ,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -224,6 +231,7 @@ export async function ensureExpedienteSchema(sql: Sql): Promise<void> {
 
   await ensureNotasAclaracion(sql);
   await migrarConsultasMedicasLegacy(sql);
+  await ensureLfpdppp(sql);
 
   if (existing.has_users && existing.has_pacientes) {
     schemaReady = true;
@@ -695,4 +703,71 @@ async function migrarConsultasMedicasLegacyInner(sql: Sql): Promise<void> {
       officialTable: "consultas",
     })
   );
+}
+
+/** LFPDPPP: dueño por médico, consentimiento por consulta. Se aplica aunque el esquema ya exista. */
+async function ensureLfpdppp(sql: Sql): Promise<void> {
+  const flags = await sql`
+    SELECT
+      to_regclass('public.pacientes') IS NOT NULL AS has_pacientes,
+      to_regclass('public.consultas') IS NOT NULL AS has_consultas
+  `;
+  const existing = (flags[0] ?? {}) as { has_pacientes?: boolean; has_consultas?: boolean };
+  if (!existing.has_pacientes || !existing.has_consultas) return;
+
+  await sql`ALTER TABLE pacientes ADD COLUMN IF NOT EXISTS medico_id UUID`;
+  await sql`ALTER TABLE consultas ADD COLUMN IF NOT EXISTS medico_id UUID`;
+  await sql`ALTER TABLE consultas ADD COLUMN IF NOT EXISTS consentimiento_informado_aceptado BOOLEAN NOT NULL DEFAULT false`;
+  await sql`ALTER TABLE consultas ADD COLUMN IF NOT EXISTS consentimiento_informado_en TIMESTAMPTZ`;
+  await sql`ALTER TABLE consultas ADD COLUMN IF NOT EXISTS consentimiento_informado_titular TEXT NOT NULL DEFAULT ''`;
+  await sql`ALTER TABLE consultas ADD COLUMN IF NOT EXISTS consentimiento_ia_aceptado BOOLEAN NOT NULL DEFAULT false`;
+  await sql`ALTER TABLE consultas ADD COLUMN IF NOT EXISTS consentimiento_version TEXT NOT NULL DEFAULT ''`;
+  await sql`CREATE INDEX IF NOT EXISTS ix_pacientes_medico ON pacientes (medico_id)`;
+  await sql`CREATE INDEX IF NOT EXISTS ix_consultas_medico_fecha ON consultas (medico_id, fecha_hora DESC)`;
+
+  await sql`
+    CREATE TABLE IF NOT EXISTS consentimientos_consulta (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      consulta_id UUID NOT NULL REFERENCES consultas (id) ON DELETE RESTRICT,
+      paciente_id UUID NOT NULL REFERENCES pacientes (id) ON DELETE RESTRICT,
+      medico_id UUID NOT NULL,
+      tipo TEXT NOT NULL,
+      aceptado BOOLEAN NOT NULL,
+      titular_nombre TEXT NOT NULL DEFAULT '',
+      version_aviso TEXT NOT NULL DEFAULT '',
+      ip TEXT,
+      user_agent TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `;
+  await sql`CREATE INDEX IF NOT EXISTS ix_consentimientos_consulta ON consentimientos_consulta (consulta_id, created_at DESC)`;
+
+  try {
+    await sql`
+      UPDATE consultas c
+      SET medico_id = u.id
+      FROM users u
+      WHERE c.medico_id IS NULL
+        AND btrim(COALESCE(u.credentials, '')) <> ''
+        AND lower(btrim(u.credentials)) = lower(btrim(COALESCE(c.medico_cedula, '')))
+    `;
+  } catch {
+    /* users puede no existir aún */
+  }
+  try {
+    await sql`
+      UPDATE pacientes p
+      SET medico_id = sub.medico_id
+      FROM (
+        SELECT DISTINCT ON (paciente_id) paciente_id, medico_id
+        FROM consultas
+        WHERE medico_id IS NOT NULL
+        ORDER BY paciente_id, fecha_hora ASC
+      ) sub
+      WHERE p.medico_id IS NULL
+        AND p.id = sub.paciente_id
+    `;
+  } catch {
+    /* ignore */
+  }
 }

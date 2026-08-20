@@ -1,4 +1,5 @@
 import type { Sql } from "../db.js";
+import { denegarSiAjeno, esRolPrivilegiado, type SesionMedico } from "./acceso-expediente";
 import { AppError } from "./errors";
 import { parseNombreCompleto } from "./parse-nombre";
 
@@ -24,6 +25,7 @@ export type PacienteRow = {
   antecedentes_importantes: AntecedentesImportantes | string | null;
   consentimiento_privacidad_aceptado?: boolean;
   consentimiento_privacidad_en?: string | Date | null;
+  medico_id?: string | null;
   created_at: string | Date;
   updated_at: string | Date;
 };
@@ -165,6 +167,11 @@ export function publicPaciente(row: PacienteRow): PacientePublico {
   };
 }
 
+function filtrarExpedientesPropios(rows: PacienteRow[], sesion?: SesionMedico): PacienteRow[] {
+  if (!sesion || esRolPrivilegiado(sesion.role)) return rows;
+  return rows.filter((row) => !row.medico_id || String(row.medico_id) === sesion.userId);
+}
+
 export function normalizeCurp(value?: string | null): string {
   return (value ?? "").trim().toUpperCase().replace(/\s+/g, "");
 }
@@ -185,7 +192,8 @@ export function normalizePersonName(value?: string | null): string {
  */
 export async function buscarPacientes(
   sql: Sql,
-  query: PacienteBusqueda
+  query: PacienteBusqueda,
+  sesion?: SesionMedico
 ): Promise<{ pacientes: PacientePublico[]; requiere_desambiguacion: boolean; alta_requerida: boolean }> {
   const q = (query.q ?? "").trim();
   const qCurp = normalizeCurp(q);
@@ -201,13 +209,13 @@ export async function buscarPacientes(
       SELECT id, numero_expediente, nombre, apellido_paterno, apellido_materno,
              fecha_nacimiento, sexo, domicilio, curp, ocupacion, antecedentes_importantes,
              consentimiento_privacidad_aceptado, consentimiento_privacidad_en,
-             created_at, updated_at
+             medico_id, created_at, updated_at
       FROM pacientes
       WHERE id = ${q}::uuid
       LIMIT 1
     `;
     return {
-      pacientes: byId.map(publicPaciente),
+      pacientes: filtrarExpedientesPropios(byId, sesion).map(publicPaciente),
       requiere_desambiguacion: false,
       alta_requerida: byId.length === 0,
     };
@@ -218,13 +226,13 @@ export async function buscarPacientes(
       SELECT id, numero_expediente, nombre, apellido_paterno, apellido_materno,
              fecha_nacimiento, sexo, domicilio, curp, ocupacion, antecedentes_importantes,
              consentimiento_privacidad_aceptado, consentimiento_privacidad_en,
-             created_at, updated_at
+             medico_id, created_at, updated_at
       FROM pacientes
       WHERE upper(numero_expediente) = ${expediente}
       LIMIT 5
     `;
     return {
-      pacientes: byExp.map(publicPaciente),
+      pacientes: filtrarExpedientesPropios(byExp, sesion).map(publicPaciente),
       requiere_desambiguacion: byExp.length > 1,
       alta_requerida: byExp.length === 0,
     };
@@ -262,14 +270,14 @@ export async function buscarPacientes(
       SELECT id, numero_expediente, nombre, apellido_paterno, apellido_materno,
              fecha_nacimiento, sexo, domicilio, curp, ocupacion, antecedentes_importantes,
              consentimiento_privacidad_aceptado, consentimiento_privacidad_en,
-             created_at, updated_at
+             medico_id, created_at, updated_at
       FROM pacientes
       WHERE upper(btrim(curp)) = ${curp}
       LIMIT 5
     `;
     if (byCurp.length > 0) {
       return {
-        pacientes: byCurp.map(publicPaciente),
+        pacientes: filtrarExpedientesPropios(byCurp, sesion).map(publicPaciente),
         requiere_desambiguacion: byCurp.length > 1,
         alta_requerida: false,
       };
@@ -317,13 +325,13 @@ export async function buscarPacientes(
   });
 
   return {
-    pacientes: filtered.map(publicPaciente),
-    requiere_desambiguacion: filtered.length > 1,
-    alta_requerida: filtered.length === 0,
+    pacientes: filtrarExpedientesPropios(filtered, sesion).map(publicPaciente),
+    requiere_desambiguacion: filtrarExpedientesPropios(filtered, sesion).length > 1,
+    alta_requerida: filtrarExpedientesPropios(filtered, sesion).length === 0,
   };
 }
 
-export async function crearPaciente(sql: Sql, input: PacienteAlta): Promise<PacientePublico> {
+export async function crearPaciente(sql: Sql, input: PacienteAlta, medicoId?: string): Promise<PacientePublico> {
   let nombre = input.nombre.trim();
   let apellidoPaterno = input.apellido_paterno.trim();
   let apellidoMaterno = (input.apellido_materno ?? "").trim();
@@ -367,7 +375,7 @@ export async function crearPaciente(sql: Sql, input: PacienteAlta): Promise<Paci
       SELECT id, numero_expediente, nombre, apellido_paterno, apellido_materno,
              fecha_nacimiento, sexo, domicilio, curp, ocupacion, antecedentes_importantes,
              consentimiento_privacidad_aceptado, consentimiento_privacidad_en,
-             created_at, updated_at
+             medico_id, created_at, updated_at
       FROM pacientes
       WHERE upper(btrim(curp)) = ${curp}
       LIMIT 1
@@ -411,7 +419,7 @@ export async function crearPaciente(sql: Sql, input: PacienteAlta): Promise<Paci
     INSERT INTO pacientes (
       numero_expediente, nombre, apellido_paterno, apellido_materno,
       fecha_nacimiento, sexo, domicilio, curp, ocupacion, antecedentes_importantes,
-      consentimiento_privacidad_aceptado, consentimiento_privacidad_en
+      consentimiento_privacidad_aceptado, consentimiento_privacidad_en, medico_id
     ) VALUES (
       ${numero},
       ${nombre},
@@ -424,12 +432,13 @@ export async function crearPaciente(sql: Sql, input: PacienteAlta): Promise<Paci
       ${ocupacion},
       ${sql.json(antecedentes)},
       true,
-      NOW()
+      NOW(),
+      ${medicoId ?? null}
     )
     RETURNING id, numero_expediente, nombre, apellido_paterno, apellido_materno,
               fecha_nacimiento, sexo, domicilio, curp, ocupacion, antecedentes_importantes,
               consentimiento_privacidad_aceptado, consentimiento_privacidad_en,
-              created_at, updated_at
+              medico_id, created_at, updated_at
   `;
   const row = inserted[0];
   if (!row) throw new AppError(500, "No se pudo crear el expediente del paciente.", "PACIENTE_INSERT_FAILED");
@@ -442,7 +451,7 @@ export async function getPacienteById(sql: Sql, id: string): Promise<PacienteRow
     SELECT id, numero_expediente, nombre, apellido_paterno, apellido_materno,
            fecha_nacimiento, sexo, domicilio, curp, ocupacion, antecedentes_importantes,
            consentimiento_privacidad_aceptado, consentimiento_privacidad_en,
-           created_at, updated_at
+           medico_id, created_at, updated_at
     FROM pacientes
     WHERE id = ${id}::uuid
     LIMIT 1
@@ -450,15 +459,21 @@ export async function getPacienteById(sql: Sql, id: string): Promise<PacienteRow
   return rows[0] ?? null;
 }
 
-export async function exigirPaciente(sql: Sql, id: string): Promise<PacientePublico> {
+export async function exigirPaciente(sql: Sql, id: string, sesion?: SesionMedico): Promise<PacientePublico> {
   const row = await getPacienteById(sql, id);
   if (!row) throw new AppError(404, "Paciente no encontrado en el expediente maestro.", "PACIENTE_NOT_FOUND");
+  denegarSiAjeno(row.medico_id ? String(row.medico_id) : null, sesion ?? { userId: "", role: "admin" });
+  if (sesion && !row.medico_id && !esRolPrivilegiado(sesion.role)) {
+    await sql`UPDATE pacientes SET medico_id = ${sesion.userId}::uuid WHERE id = ${id}::uuid AND medico_id IS NULL`;
+    row.medico_id = sesion.userId;
+  }
   return publicPaciente(row);
 }
 
 export async function listHistorialPaciente(
   sql: Sql,
   pacienteId: string,
+  sesion?: SesionMedico,
   limit = 12
 ): Promise<ConsultaHistorialItem[]> {
   const rows = await sql<
@@ -480,6 +495,7 @@ export async function listHistorialPaciente(
       tratamiento, notas_evolucion, plan, resumen, estado
     FROM consultas
     WHERE paciente_id = ${pacienteId}::uuid
+      ${sesion && !esRolPrivilegiado(sesion.role) ? sql`AND (medico_id = ${sesion.userId}::uuid OR medico_id IS NULL)` : sql``}
     ORDER BY fecha_hora DESC
     LIMIT ${limit}
   `;

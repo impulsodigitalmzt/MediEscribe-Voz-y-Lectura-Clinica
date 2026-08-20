@@ -22,6 +22,9 @@ import {
   type PacientePublico,
 } from "./pacientes";
 import type { NotaAclaracionPublica } from "./aclaraciones";
+import { denegarSiAjeno, esRolPrivilegiado, type SesionMedico } from "./acceso-expediente";
+import { exigirConsentimientoConsulta } from "./consentimiento";
+import { cifrarPhi, descifrarPhi } from "./phi";
 
 export type ConsultaMedicaRow = {
   id: string;
@@ -47,6 +50,12 @@ export type ConsultaMedicaRow = {
   estado: string | null;
   medico_nombre: string | null;
   medico_cedula: string | null;
+  medico_id?: string | null;
+  consentimiento_informado_aceptado?: boolean | null;
+  consentimiento_informado_en?: string | Date | null;
+  consentimiento_informado_titular?: string | null;
+  consentimiento_ia_aceptado?: boolean | null;
+  consentimiento_version?: string | null;
   finalizada_en: string | Date | null;
 };
 
@@ -76,6 +85,12 @@ export type ConsultaPublica = {
   estado: string | null;
   medico_nombre: string | null;
   medico_cedula: string | null;
+  medico_id?: string | null;
+  consentimiento_informado_aceptado?: boolean;
+  consentimiento_informado_en?: string | null;
+  consentimiento_informado_titular?: string;
+  consentimiento_ia_aceptado?: boolean;
+  consentimiento_version?: string;
   finalizada_en: string | null;
   guardia_legal?: DictamenNom004;
   historial?: ConsultaHistorialItem[];
@@ -117,10 +132,17 @@ export async function ensureConsultasSchema(sql: Sql): Promise<void> {
   await ensureExpedienteSchema(sql);
 }
 
-export function publicConsulta(row: ConsultaMedicaRow, paciente?: PacientePublico): ConsultaPublica {
+export async function publicConsulta(
+  row: ConsultaMedicaRow,
+  paciente?: PacientePublico,
+  phiSecret?: string
+): Promise<ConsultaPublica> {
   const nota = parseNota(row.nota_estructurada);
   const fechaHora = row.fecha_hora instanceof Date ? row.fecha_hora.toISOString() : String(row.fecha_hora);
   const pacienteNombre = paciente?.nombre_completo || row.paciente_nombre || nota?.nombre_paciente || "";
+  const transcripcion = phiSecret
+    ? await descifrarPhi(phiSecret, row.transcripcion)
+    : row.transcripcion;
   return {
     id: String(row.id),
     paciente_id: String(row.paciente_id),
@@ -129,7 +151,7 @@ export function publicConsulta(row: ConsultaMedicaRow, paciente?: PacientePublic
     paciente_nombre: pacienteNombre,
     paciente,
     resumen: row.resumen,
-    transcripcion: row.transcripcion,
+    transcripcion,
     nota_estructurada: nota,
     motivo_consulta: row.motivo_consulta,
     exploracion_fisica: row.exploracion_fisica,
@@ -147,6 +169,16 @@ export function publicConsulta(row: ConsultaMedicaRow, paciente?: PacientePublic
     estado: row.estado,
     medico_nombre: row.medico_nombre,
     medico_cedula: row.medico_cedula,
+    medico_id: row.medico_id ? String(row.medico_id) : null,
+    consentimiento_informado_aceptado: Boolean(row.consentimiento_informado_aceptado),
+    consentimiento_informado_en: row.consentimiento_informado_en
+      ? row.consentimiento_informado_en instanceof Date
+        ? row.consentimiento_informado_en.toISOString()
+        : String(row.consentimiento_informado_en)
+      : null,
+    consentimiento_informado_titular: row.consentimiento_informado_titular ?? "",
+    consentimiento_ia_aceptado: Boolean(row.consentimiento_ia_aceptado),
+    consentimiento_version: row.consentimiento_version ?? "",
     finalizada_en:
       row.finalizada_en instanceof Date ? row.finalizada_en.toISOString() : row.finalizada_en ?? null,
     guardia_legal: nota ? validarNotaNom004(nota) : undefined,
@@ -196,14 +228,19 @@ export async function insertConsulta(
     modeloWhisper: string;
     modeloLlm: string;
     nombreArchivo: string | null;
+    medicoId?: string | null;
+    phiSecret?: string;
   }
 ): Promise<ConsultaMedicaRow> {
+  const transcripcion = input.phiSecret
+    ? await cifrarPhi(input.phiSecret, input.transcripcion)
+    : input.transcripcion;
   const inserted = await sql<ConsultaMedicaRow[]>`
     INSERT INTO consultas (
       paciente_id, motivo_consulta, exploracion_fisica, diagnostico, tratamiento,
       notas_evolucion, padecimiento_actual, plan, resumen, transcripcion, nota_estructurada,
       receta_paciente_nativo, idioma, especialidad, modelo_whisper, modelo_llm, nombre_archivo, estado,
-      medico_nombre, medico_cedula
+      medico_nombre, medico_cedula, medico_id
     ) VALUES (
       ${input.pacienteId}::uuid,
       ${input.nota.motivo_consulta},
@@ -214,7 +251,7 @@ export async function insertConsulta(
       ${input.nota.padecimiento_actual},
       ${input.nota.plan},
       ${input.nota.resumen},
-      ${input.transcripcion},
+      ${transcripcion},
       ${sql.json(input.nota)},
       ${sql.json(input.receta)},
       ${input.idioma},
@@ -224,13 +261,16 @@ export async function insertConsulta(
       ${input.nombreArchivo},
       ${ESTADO_BORRADOR},
       ${input.nota.medico_nombre},
-      ${input.nota.medico_cedula}
+      ${input.nota.medico_cedula},
+      ${input.medicoId ?? null}
     )
     RETURNING
       id, paciente_id, fecha_hora, resumen, transcripcion, nota_estructurada, receta_paciente_nativo,
       motivo_consulta, exploracion_fisica, padecimiento_actual, diagnostico,
       tratamiento, notas_evolucion, plan, receta_paciente_nativo, idioma, especialidad,
-      modelo_whisper, modelo_llm, nombre_archivo, estado, medico_nombre, medico_cedula, finalizada_en
+      modelo_whisper, modelo_llm, nombre_archivo, estado, medico_nombre, medico_cedula, finalizada_en,
+      medico_id, consentimiento_informado_aceptado, consentimiento_informado_en,
+      consentimiento_informado_titular, consentimiento_ia_aceptado, consentimiento_version
   `;
 
   const row = inserted[0];
@@ -247,6 +287,8 @@ export async function abrirConsultaBorrador(
     pacienteId: string;
     especialidad?: string;
     datosMedico?: DatosMedico;
+    sesion?: SesionMedico;
+    phiSecret?: string;
   }
 ): Promise<{ row: ConsultaMedicaRow; paciente: PacientePublico; historial: ConsultaHistorialItem[] }> {
   if (!isUuid(input.pacienteId)) {
@@ -256,8 +298,8 @@ export async function abrirConsultaBorrador(
       "PACIENTE_REQUERIDO"
     );
   }
-  const paciente = await exigirPaciente(sql, input.pacienteId);
-  const historial = await listHistorialPaciente(sql, input.pacienteId);
+  const paciente = await exigirPaciente(sql, input.pacienteId, input.sesion);
+  const historial = await listHistorialPaciente(sql, input.pacienteId, input.sesion);
   const nota = notaExpedienteLegal(notaDesdeExpediente(paciente, input.datosMedico ?? {}), paciente, input.datosMedico ?? {});
   const receta = recetaDesdeNota(nota, "es");
   const row = await insertConsulta(sql, {
@@ -271,6 +313,8 @@ export async function abrirConsultaBorrador(
     modeloWhisper: "",
     modeloLlm: "",
     nombreArchivo: null,
+    medicoId: input.sesion?.userId ?? null,
+    phiSecret: input.phiSecret,
   });
   return { row, paciente, historial };
 }
@@ -278,21 +322,41 @@ export async function abrirConsultaBorrador(
 export async function listConsultas(
   sql: Sql,
   page: number,
-  pageSize: number
+  pageSize: number,
+  sesion?: SesionMedico
 ): Promise<{ rows: ConsultaMedicaRow[]; pacientes: Map<string, PacientePublico>; total: number }> {
   const offset = (page - 1) * pageSize;
+  const soloPropios = sesion && !esRolPrivilegiado(sesion.role);
   const [countRows, rows] = await Promise.all([
-    sql<{ count: string | number }[]>`SELECT COUNT(*)::int AS count FROM consultas`,
-    sql<ConsultaMedicaRow[]>`
-      SELECT
-        c.id, c.paciente_id, c.fecha_hora, c.resumen, c.transcripcion, c.nota_estructurada,
-        c.motivo_consulta, c.exploracion_fisica, c.padecimiento_actual, c.diagnostico,
-        c.tratamiento, c.notas_evolucion, c.plan, c.receta_paciente_nativo, c.idioma, c.especialidad,
-        c.modelo_whisper, c.modelo_llm, c.nombre_archivo, c.estado, c.medico_nombre, c.medico_cedula, c.finalizada_en
-      FROM consultas c
-      ORDER BY c.fecha_hora DESC
-      LIMIT ${pageSize} OFFSET ${offset}
-    `,
+    soloPropios
+      ? sql<{ count: string | number }[]>`SELECT COUNT(*)::int AS count FROM consultas WHERE medico_id = ${sesion.userId}::uuid`
+      : sql<{ count: string | number }[]>`SELECT COUNT(*)::int AS count FROM consultas`,
+    soloPropios
+      ? sql<ConsultaMedicaRow[]>`
+          SELECT
+            c.id, c.paciente_id, c.fecha_hora, c.resumen, c.transcripcion, c.nota_estructurada,
+            c.motivo_consulta, c.exploracion_fisica, c.padecimiento_actual, c.diagnostico,
+            c.tratamiento, c.notas_evolucion, c.plan, c.receta_paciente_nativo, c.idioma, c.especialidad,
+            c.modelo_whisper, c.modelo_llm, c.nombre_archivo, c.estado, c.medico_nombre, c.medico_cedula, c.finalizada_en,
+            c.medico_id, c.consentimiento_informado_aceptado, c.consentimiento_informado_en,
+            c.consentimiento_informado_titular, c.consentimiento_ia_aceptado, c.consentimiento_version
+          FROM consultas c
+          WHERE c.medico_id = ${sesion.userId}::uuid
+          ORDER BY c.fecha_hora DESC
+          LIMIT ${pageSize} OFFSET ${offset}
+        `
+      : sql<ConsultaMedicaRow[]>`
+          SELECT
+            c.id, c.paciente_id, c.fecha_hora, c.resumen, c.transcripcion, c.nota_estructurada,
+            c.motivo_consulta, c.exploracion_fisica, c.padecimiento_actual, c.diagnostico,
+            c.tratamiento, c.notas_evolucion, c.plan, c.receta_paciente_nativo, c.idioma, c.especialidad,
+            c.modelo_whisper, c.modelo_llm, c.nombre_archivo, c.estado, c.medico_nombre, c.medico_cedula, c.finalizada_en,
+            c.medico_id, c.consentimiento_informado_aceptado, c.consentimiento_informado_en,
+            c.consentimiento_informado_titular, c.consentimiento_ia_aceptado, c.consentimiento_version
+          FROM consultas c
+          ORDER BY c.fecha_hora DESC
+          LIMIT ${pageSize} OFFSET ${offset}
+        `,
   ]);
 
   const ids = [...new Set(rows.map((row) => String(row.paciente_id)).filter(Boolean))];
@@ -300,7 +364,7 @@ export async function listConsultas(
   await Promise.all(
     ids.map(async (id) => {
       try {
-        pacientes.set(id, await exigirPaciente(sql, id));
+        pacientes.set(id, await exigirPaciente(sql, id, sesion));
       } catch {
         /* expediente huerfano */
       }
@@ -316,12 +380,32 @@ export async function getConsultaById(sql: Sql, id: string): Promise<ConsultaMed
       id, paciente_id, fecha_hora, resumen, transcripcion, nota_estructurada,
       motivo_consulta, exploracion_fisica, padecimiento_actual, diagnostico,
       tratamiento, notas_evolucion, plan, receta_paciente_nativo, idioma, especialidad,
-      modelo_whisper, modelo_llm, nombre_archivo, estado, medico_nombre, medico_cedula, finalizada_en
+      modelo_whisper, modelo_llm, nombre_archivo, estado, medico_nombre, medico_cedula, finalizada_en,
+      medico_id, consentimiento_informado_aceptado, consentimiento_informado_en,
+      consentimiento_informado_titular, consentimiento_ia_aceptado, consentimiento_version
     FROM consultas
     WHERE id = ${id}::uuid
     LIMIT 1
   `;
   return rows[0] ?? null;
+}
+
+export async function exigirConsultaAcceso(
+  sql: Sql,
+  id: string,
+  sesion: SesionMedico
+): Promise<ConsultaMedicaRow> {
+  const row = await getConsultaById(sql, id);
+  if (!row) throw new AppError(404, "Consulta médica no encontrada.", "CONSULTA_NOT_FOUND");
+  denegarSiAjeno(row.medico_id ? String(row.medico_id) : null, sesion);
+  if (!row.medico_id && !esRolPrivilegiado(sesion.role)) {
+    await sql`
+      UPDATE consultas SET medico_id = ${sesion.userId}::uuid
+      WHERE id = ${id}::uuid AND medico_id IS NULL
+    `;
+    row.medico_id = sesion.userId;
+  }
+  return row;
 }
 
 export async function procesarConsultaDesdeAudio(
@@ -332,6 +416,7 @@ export async function procesarConsultaDesdeAudio(
     especialidad: string;
     datosMedico?: DatosMedico;
     consultaId?: string;
+    sesion?: SesionMedico;
   },
   ctx?: WaitUntilCtx
 ): Promise<{
@@ -353,6 +438,7 @@ export async function procesarConsultaDesdeAudio(
       nombreArchivo: input.audio.filename,
       datosMedico: input.datosMedico,
       consultaId: input.consultaId,
+      sesion: input.sesion,
     },
     ctx
   );
@@ -368,6 +454,7 @@ export async function procesarConsultaDesdeTexto(
     nombreArchivo?: string | null;
     datosMedico?: DatosMedico;
     consultaId?: string;
+    sesion?: SesionMedico;
   },
   ctx?: WaitUntilCtx
 ): Promise<{
@@ -385,8 +472,15 @@ export async function procesarConsultaDesdeTexto(
 
   let pacienteId = (input.pacienteId ?? "").trim();
   if (!isUuid(pacienteId) && input.consultaId) {
-    const existente = await withSql(env, ctx, (sql) => getConsultaById(sql, input.consultaId as string));
-    if (existente) pacienteId = String(existente.paciente_id);
+    const existente = await withSql(env, ctx, (sql) =>
+      input.sesion
+        ? exigirConsultaAcceso(sql, input.consultaId as string, input.sesion)
+        : getConsultaById(sql, input.consultaId as string)
+    );
+    if (existente) {
+      exigirConsentimientoConsulta(existente);
+      pacienteId = String(existente.paciente_id);
+    }
   }
   if (!isUuid(pacienteId)) {
     throw new AppError(
@@ -397,8 +491,11 @@ export async function procesarConsultaDesdeTexto(
   }
 
   const { paciente, historial } = await withSql(env, ctx, async (sql) => {
-    const found = await exigirPaciente(sql, pacienteId);
-    const previas = await listHistorialPaciente(sql, pacienteId);
+    if (input.consultaId && input.sesion) {
+      await exigirConsultaAcceso(sql, input.consultaId, input.sesion);
+    }
+    const found = await exigirPaciente(sql, pacienteId, input.sesion);
+    const previas = await listHistorialPaciente(sql, pacienteId, input.sesion);
     return { paciente: found, historial: previas };
   });
 
@@ -432,6 +529,8 @@ export async function procesarConsultaDesdeTexto(
         modeloWhisper: env.GROQ_WHISPER_MODEL || "whisper-large-v3",
         modeloLlm: env.GROQ_MODEL || "llama-3.3-70b-versatile",
         nombreArchivo: input.nombreArchivo ?? null,
+        sesion: input.sesion,
+        phiSecret: env.SECRET_KEY,
       });
     }
     return insertConsulta(sql, {
@@ -445,6 +544,8 @@ export async function procesarConsultaDesdeTexto(
       modeloWhisper: env.GROQ_WHISPER_MODEL || "whisper-large-v3",
       modeloLlm: env.GROQ_MODEL || "llama-3.3-70b-versatile",
       nombreArchivo: input.nombreArchivo ?? null,
+      medicoId: input.sesion?.userId ?? null,
+      phiSecret: env.SECRET_KEY,
     });
   });
 
@@ -464,20 +565,28 @@ export async function guardarDocumentacionConsulta(
     modeloWhisper: string;
     modeloLlm: string;
     nombreArchivo: string | null;
+    sesion?: SesionMedico;
+    phiSecret?: string;
   }
 ): Promise<ConsultaMedicaRow> {
-  const actual = await getConsultaById(sql, id);
+  const actual = input.sesion
+    ? await exigirConsultaAcceso(sql, id, input.sesion)
+    : await getConsultaById(sql, id);
   if (!actual) throw new AppError(404, "Consulta médica no encontrada.", "CONSULTA_NOT_FOUND");
   if (consultaInmutable(actual.estado)) throw notaInmutableError();
+  exigirConsentimientoConsulta(actual);
   if (String(actual.paciente_id) !== input.pacienteId) {
     throw new AppError(409, "La consulta no pertenece a este expediente maestro.", "CONSULTA_PACIENTE_MISMATCH");
   }
-  const paciente = await exigirPaciente(sql, input.pacienteId);
+  const paciente = await exigirPaciente(sql, input.pacienteId, input.sesion);
   const notaFinal = notaExpedienteLegal(input.nota, paciente);
+  const transcripcion = input.phiSecret
+    ? await cifrarPhi(input.phiSecret, input.transcripcion)
+    : input.transcripcion;
   const updated = await sql<ConsultaMedicaRow[]>`
     UPDATE consultas
     SET
-      transcripcion = ${input.transcripcion},
+      transcripcion = ${transcripcion},
       nota_estructurada = ${sql.json(notaFinal)},
       receta_paciente_nativo = ${sql.json(input.receta)},
       resumen = ${notaFinal.resumen},
@@ -501,7 +610,9 @@ export async function guardarDocumentacionConsulta(
       id, paciente_id, fecha_hora, resumen, transcripcion, nota_estructurada,
       motivo_consulta, exploracion_fisica, padecimiento_actual, diagnostico,
       tratamiento, notas_evolucion, plan, receta_paciente_nativo, idioma, especialidad,
-      modelo_whisper, modelo_llm, nombre_archivo, estado, medico_nombre, medico_cedula, finalizada_en
+      modelo_whisper, modelo_llm, nombre_archivo, estado, medico_nombre, medico_cedula, finalizada_en,
+      medico_id, consentimiento_informado_aceptado, consentimiento_informado_en,
+      consentimiento_informado_titular, consentimiento_ia_aceptado, consentimiento_version
   `;
   if (!updated[0]) throw notaInmutableError();
   updated[0].paciente_nombre = paciente.nombre_completo;
@@ -513,13 +624,15 @@ export async function actualizarConsulta(
   id: string,
   nota: NotaClinica,
   receta?: RecetaPaciente | null,
-  datosMedico: DatosMedico = {}
+  datosMedico: DatosMedico = {},
+  sesion?: SesionMedico
 ): Promise<ConsultaMedicaRow> {
-  const actual = await getConsultaById(sql, id);
+  const actual = sesion ? await exigirConsultaAcceso(sql, id, sesion) : await getConsultaById(sql, id);
   if (!actual) throw new AppError(404, "Consulta médica no encontrada.", "CONSULTA_NOT_FOUND");
   if (consultaInmutable(actual.estado)) throw notaInmutableError();
+  exigirConsentimientoConsulta(actual);
 
-  const paciente = await exigirPaciente(sql, String(actual.paciente_id));
+  const paciente = await exigirPaciente(sql, String(actual.paciente_id), sesion);
   const notaFinal = notaExpedienteLegal(nota, paciente, datosMedico);
   const recetaFinal = receta ?? parseRecetaRow(actual.receta_paciente_nativo);
   const recetaToSave: RecetaPaciente = recetaFinal ?? {
@@ -554,7 +667,9 @@ export async function actualizarConsulta(
       id, paciente_id, fecha_hora, resumen, transcripcion, nota_estructurada,
       motivo_consulta, exploracion_fisica, padecimiento_actual, diagnostico,
       tratamiento, notas_evolucion, plan, receta_paciente_nativo, idioma, especialidad,
-      modelo_whisper, modelo_llm, nombre_archivo, estado, medico_nombre, medico_cedula, finalizada_en
+      modelo_whisper, modelo_llm, nombre_archivo, estado, medico_nombre, medico_cedula, finalizada_en,
+      medico_id, consentimiento_informado_aceptado, consentimiento_informado_en,
+      consentimiento_informado_titular, consentimiento_ia_aceptado, consentimiento_version
   `;
   if (!updated[0]) throw notaInmutableError();
   updated[0].paciente_nombre = paciente.nombre_completo;
@@ -566,13 +681,15 @@ export async function finalizarConsulta(
   id: string,
   nota?: NotaClinica,
   receta?: RecetaPaciente | null,
-  datosMedico: DatosMedico = {}
+  datosMedico: DatosMedico = {},
+  sesion?: SesionMedico
 ): Promise<ConsultaMedicaRow> {
-  const actual = await getConsultaById(sql, id);
+  const actual = sesion ? await exigirConsultaAcceso(sql, id, sesion) : await getConsultaById(sql, id);
   if (!actual) throw new AppError(404, "Consulta médica no encontrada.", "CONSULTA_NOT_FOUND");
   if (consultaInmutable(actual.estado)) throw notaInmutableError();
+  exigirConsentimientoConsulta(actual);
 
-  const paciente = await exigirPaciente(sql, String(actual.paciente_id));
+  const paciente = await exigirPaciente(sql, String(actual.paciente_id), sesion);
   const parsed = nota ?? parseNota(actual.nota_estructurada);
   if (!parsed) throw new AppError(400, "No hay nota estructurada para finalizar.", "NOTA_VACIA");
   const notaFinal = notaExpedienteLegal(parsed, paciente, datosMedico);
@@ -613,7 +730,9 @@ export async function finalizarConsulta(
       id, paciente_id, fecha_hora, resumen, transcripcion, nota_estructurada,
       motivo_consulta, exploracion_fisica, padecimiento_actual, diagnostico,
       tratamiento, notas_evolucion, plan, receta_paciente_nativo, idioma, especialidad,
-      modelo_whisper, modelo_llm, nombre_archivo, estado, medico_nombre, medico_cedula, finalizada_en
+      modelo_whisper, modelo_llm, nombre_archivo, estado, medico_nombre, medico_cedula, finalizada_en,
+      medico_id, consentimiento_informado_aceptado, consentimiento_informado_en,
+      consentimiento_informado_titular, consentimiento_ia_aceptado, consentimiento_version
   `;
   if (!updated[0]) throw notaInmutableError();
   updated[0].paciente_nombre = paciente.nombre_completo;

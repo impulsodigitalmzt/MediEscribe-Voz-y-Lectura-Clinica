@@ -46,6 +46,11 @@ export function requireRoles(roles: string[]) {
   };
 }
 
+export function sesionDesdeAuth(c: AppContext): { userId: string; role: string } {
+  const auth = c.get("auth");
+  return { userId: auth.user_id, role: auth.role };
+}
+
 export function medicoDesdeAuth(c: AppContext): {
   medicoNombre: string;
   medicoCedula: string;

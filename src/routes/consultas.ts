@@ -2,13 +2,14 @@ import { Hono } from "hono";
 import type { Context } from "hono";
 import { extractConsultaFields, parseConsultaMultipart, parseMultipartBody } from "../lib/audio";
 import { auditExpedienteMiddleware } from "../lib/audit";
-import { datosMedicoDesdeSesion, requireAuth, type AuthContext } from "../lib/auth";
+import { datosMedicoDesdeSesion, requireAuth, sesionDesdeAuth, type AuthContext } from "../lib/auth";
 import { isAppError } from "../lib/errors";
 import { isNom004Error, NORMA_EXPEDIENTE } from "../lib/guardia-legal";
 import { jsonError } from "../lib/http";
 import {
   abrirConsultaBorrador,
   actualizarConsulta,
+  exigirConsultaAcceso,
   finalizarConsulta,
   getConsultaById,
   listConsultas,
@@ -19,6 +20,7 @@ import {
 } from "../lib/consultas";
 import { exigirPaciente, isUuid, listHistorialPaciente } from "../lib/pacientes";
 import type { NotaClinica, RecetaPaciente } from "../lib/nota-clinica";
+import { registrarConsentimientoConsulta } from "../lib/consentimiento";
 import {
   actualizarNotaAclaracion,
   cerrarNotaAclaracion,
@@ -47,6 +49,7 @@ consultaRoutes.post("/", async (c) => {
           domicilio: form.domicilio,
         }),
         consultaId: form.consultaId || undefined,
+        sesion: sesionDesdeAuth(c),
       },
       c.executionCtx
     );
@@ -128,7 +131,6 @@ consultaRoutes.post("/texto", async (c) => {
         groqApiKeyLength: c.env.GROQ_API_KEY ? c.env.GROQ_API_KEY.length : 0,
         groqModel: c.env.GROQ_MODEL || "llama-3.3-70b-versatile",
         transcriptChars: transcripcion.trim().length,
-        transcriptPreview: transcripcion.trim().slice(0, 240),
         consultaId: consultaId || null,
         pacienteId: pacienteId || null,
       })
@@ -142,6 +144,7 @@ consultaRoutes.post("/texto", async (c) => {
         especialidad,
         datosMedico: datosMedicoDesdeSesion(c, { medicoNombre, medicoCedula, sexo, domicilio }),
         consultaId: consultaId || undefined,
+        sesion: sesionDesdeAuth(c),
       },
       c.executionCtx
     );
@@ -157,11 +160,14 @@ consultaRoutes.get("/", async (c) => {
     const page = Math.max(1, Number.parseInt(c.req.query("page") ?? "1", 10) || 1);
     const pageSize = Math.min(50, Math.max(1, Number.parseInt(c.req.query("page_size") ?? "20", 10) || 20));
     const { rows, pacientes, total } = await withSql(c.env, c.executionCtx, (sql) =>
-      listConsultas(sql, page, pageSize)
+      listConsultas(sql, page, pageSize, sesionDesdeAuth(c))
+    );
+    const consultas = await Promise.all(
+      rows.map((row) => publicConsulta(row, pacientes.get(String(row.paciente_id)), c.env.SECRET_KEY))
     );
     return c.json({
       ok: true,
-      consultas: rows.map((row) => publicConsulta(row, pacientes.get(String(row.paciente_id)))),
+      consultas,
       total,
       page,
       page_size: pageSize,
@@ -193,9 +199,11 @@ consultaRoutes.post("/abrir", async (c) => {
           medicoNombre: body.medico_nombre,
           medicoCedula: body.medico_cedula,
         }),
+        sesion: sesionDesdeAuth(c),
+        phiSecret: c.env.SECRET_KEY,
       })
     );
-    const publica = publicConsulta(row, paciente);
+    const publica = await publicConsulta(row, paciente, c.env.SECRET_KEY);
     publica.historial = historial;
     return c.json({ ok: true, consulta: publica, paciente, historial }, 201);
   } catch (error) {
@@ -220,12 +228,13 @@ consultaRoutes.patch("/:id", async (c) => {
         id,
         body.nota as NotaClinica,
         body.receta,
-        datosMedicoDesdeSesion(c)
+        datosMedicoDesdeSesion(c),
+        sesionDesdeAuth(c)
       );
-      const found = await exigirPaciente(sql, String(updated.paciente_id));
+      const found = await exigirPaciente(sql, String(updated.paciente_id), sesionDesdeAuth(c));
       return { row: updated, paciente: found };
     });
-    const publica = publicConsulta(row, paciente);
+    const publica = await publicConsulta(row, paciente, c.env.SECRET_KEY);
     return c.json({
       ok: true,
       consulta: publica,
@@ -247,11 +256,11 @@ consultaRoutes.post("/:id/finalizar", async (c) => {
       receta?: RecetaPaciente;
     };
     const { row, paciente } = await withSql(c.env, c.executionCtx, async (sql) => {
-      const updated = await finalizarConsulta(sql, id, body.nota, body.receta, datosMedicoDesdeSesion(c));
-      const found = await exigirPaciente(sql, String(updated.paciente_id));
+      const updated = await finalizarConsulta(sql, id, body.nota, body.receta, datosMedicoDesdeSesion(c), sesionDesdeAuth(c));
+      const found = await exigirPaciente(sql, String(updated.paciente_id), sesionDesdeAuth(c));
       return { row: updated, paciente: found };
     });
-    const publica = publicConsulta(row, paciente);
+    const publica = await publicConsulta(row, paciente, c.env.SECRET_KEY);
     return c.json({
       ok: true,
       consulta: publica,
@@ -261,6 +270,37 @@ consultaRoutes.post("/:id/finalizar", async (c) => {
     });
   } catch (error) {
     return consultaError(c, error, "consulta_finalize_failed");
+  }
+});
+
+consultaRoutes.post("/:id/consentimiento", async (c) => {
+  try {
+    const id = c.req.param("id") ?? "";
+    if (!isUuid(id)) return jsonError(c, 400, "Identificador de consulta inválido.");
+    const body = (await c.req.json<{
+      titular_nombre?: string;
+      consentimiento_informado?: boolean;
+      consentimiento_ia?: boolean;
+    }>().catch(() => ({}))) as {
+      titular_nombre?: string;
+      consentimiento_informado?: boolean;
+      consentimiento_ia?: boolean;
+    };
+    const consentimiento = await withSql(c.env, c.executionCtx, async (sql) => {
+      const row = await exigirConsultaAcceso(sql, id, sesionDesdeAuth(c));
+      return registrarConsentimientoConsulta(sql, {
+        consultaId: id,
+        pacienteId: String(row.paciente_id),
+        medicoId: sesionDesdeAuth(c).userId,
+        titularNombre: body.titular_nombre ?? "",
+        informado: body.consentimiento_informado !== false,
+        ia: body.consentimiento_ia !== false,
+        request: c,
+      });
+    });
+    return c.json({ ok: true, consentimiento });
+  } catch (error) {
+    return consultaError(c, error, "consulta_consentimiento_failed");
   }
 });
 
@@ -333,15 +373,14 @@ consultaRoutes.get("/:id", async (c) => {
       return jsonError(c, 400, "Identificador de consulta inválido.");
     }
     const payload = await withSql(c.env, c.executionCtx, async (sql) => {
-      const row = await getConsultaById(sql, id);
-      if (!row) return null;
-      const paciente = await exigirPaciente(sql, String(row.paciente_id));
-      const historial = await listHistorialPaciente(sql, String(row.paciente_id));
+      const row = await exigirConsultaAcceso(sql, id, sesionDesdeAuth(c));
+      const paciente = await exigirPaciente(sql, String(row.paciente_id), sesionDesdeAuth(c));
+      const historial = await listHistorialPaciente(sql, String(row.paciente_id), sesionDesdeAuth(c));
       const aclaraciones = await listarNotasAclaracion(sql, id);
       return { row, paciente, historial, aclaraciones };
     });
     if (!payload) return jsonError(c, 404, "Consulta médica no encontrada.");
-    const publica = publicConsulta(payload.row, payload.paciente);
+    const publica = await publicConsulta(payload.row, payload.paciente, c.env.SECRET_KEY);
     publica.historial = payload.historial;
     publica.aclaraciones = payload.aclaraciones;
     return c.json({ ok: true, consulta: publica, historial: payload.historial, aclaraciones: payload.aclaraciones });
@@ -356,17 +395,18 @@ function respuestaConsulta(result: {
   nota: NotaClinica;
   receta: RecetaPaciente;
   paciente: Parameters<typeof publicConsulta>[1];
-  guardia_legal: ReturnType<typeof publicConsulta> extends { guardia_legal?: infer T } ? T : never;
+  guardia_legal: Awaited<ReturnType<typeof publicConsulta>> extends { guardia_legal?: infer T } ? T : never;
 }) {
   return {
     ok: true,
-    consulta: publicConsulta(result.row, result.paciente),
+    consulta: undefined as unknown,
     transcripcion: result.transcripcion,
     nota: result.nota,
     receta: result.receta,
     paciente: result.paciente,
     idioma_detectado: result.receta.idioma,
     guardia_legal: result.guardia_legal,
+    _row: result.row,
   };
 }
 

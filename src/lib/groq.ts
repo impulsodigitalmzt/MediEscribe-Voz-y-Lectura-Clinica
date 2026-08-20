@@ -56,6 +56,13 @@ function groqKeyMeta(env: Env): Record<string, unknown> {
   };
 }
 
+function groqPrivacyHeaders(env: Env): Record<string, string> {
+  return {
+    Authorization: `Bearer ${env.GROQ_API_KEY}`,
+    "Content-Type": "application/json",
+  };
+}
+
 function shrinkMessages(messages: GroqChatMessage[], maxChars: number): GroqChatMessage[] {
   return messages.map((message) => {
     if (message.role !== "user" || message.content.length <= maxChars) return message;
@@ -84,12 +91,14 @@ export async function groqChatJson(
   let payload = messages;
   const userChars = messages.find((m) => m.role === "user")?.content.length ?? 0;
   const groqUrl = "https://api.groq.com/openai/v1/chat/completions";
+  let omitirStore = false;
 
   logGroq("groq_chat_request", {
     ...groqKeyMeta(env),
     maxTokens,
     userChars,
     messageCount: messages.length,
+    privacy: { store: false, training: "forbidden" },
   });
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -103,19 +112,19 @@ export async function groqChatJson(
       messageCount: payload.length,
     });
 
+    const body: Record<string, unknown> = {
+      model,
+      temperature: options?.temperature ?? 0.2,
+      max_tokens: maxTokens,
+      response_format: { type: "json_object" },
+      messages: payload,
+    };
+    if (!omitirStore) body.store = false;
+
     const response = await fetch(groqUrl, {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${env.GROQ_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model,
-        temperature: options?.temperature ?? 0.2,
-        max_tokens: maxTokens,
-        response_format: { type: "json_object" },
-        messages: payload,
-      }),
+      headers: groqPrivacyHeaders(env),
+      body: JSON.stringify(body),
     });
 
     const errText = response.ok ? "" : await response.text();
@@ -138,9 +147,12 @@ export async function groqChatJson(
           ? "API key inválida o sin permiso. Revise wrangler secret put GROQ_API_KEY."
           : undefined,
       });
-      if (response.status === 413 && attempt === 0) {
-        maxTokens = Math.min(maxTokens, 900);
-        payload = shrinkMessages(payload, 3500);
+      if ((response.status === 400 || response.status === 413) && attempt === 0) {
+        if (response.status === 400) omitirStore = true;
+        if (response.status === 413) {
+          maxTokens = Math.min(maxTokens, 900);
+          payload = shrinkMessages(payload, 3500);
+        }
         continue;
       }
       throw new AppError(
@@ -162,14 +174,13 @@ export async function groqChatJson(
       model,
       attempt,
       contentChars: content.length,
-      contentPreview: content.slice(0, 600),
     });
     logGroq("groq_chat_raw_content", {
       ...groqKeyMeta(env),
       httpStatus: response.status,
       contentChars: content.length,
-      contentPreview: content.slice(0, 1800),
       groqError: data.error?.message ?? null,
+      privacy: { store: false, training: "forbidden" },
     });
     if (!content.trim()) {
       throw new AppError(502, "Groq devolvió una respuesta vacía.", "GROQ_EMPTY_RESPONSE");

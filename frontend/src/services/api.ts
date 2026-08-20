@@ -25,6 +25,31 @@ function isCredentialAuthUrl(url?: string): boolean {
   return url.includes('/auth/login') || url.includes('/auth/register') || url.includes('/auth/refresh');
 }
 
+export class ConsultaValidacionError extends Error {
+  guia: string[];
+  nota?: NotaClinica;
+  constructor(message: string, guia: string[] = [], nota?: NotaClinica) {
+    super(message);
+    this.name = 'ConsultaValidacionError';
+    this.guia = guia;
+    this.nota = nota;
+  }
+}
+
+function throwConsultaFailure(
+  data: { detail?: string; code?: string; guia?: string[]; nota?: NotaClinica; faltantes?: Array<{ mensaje: string }> },
+  fallback: string,
+): never {
+  if (data.code === 'NOM004_INCOMPLETA' || data.guia?.length || data.faltantes?.length) {
+    throw new ConsultaValidacionError(
+      data.detail || fallback,
+      data.guia?.length ? data.guia : (data.faltantes ?? []).map((item) => item.mensaje),
+      data.nota,
+    );
+  }
+  throw new Error(data.detail || fallback);
+}
+
 export function apiErrorMessage(err: unknown, fallback: string): string {
   const ax = err as {
     response?: { data?: unknown; status?: number };
@@ -65,9 +90,52 @@ async function readApiJson<T>(response: Response, fallback: string): Promise<T> 
     }
   }
   if (!response.ok) {
-    throw new Error(data.detail || fallback);
+    throwConsultaFailure(data, fallback);
   }
   return data;
+}
+
+async function readConsultaIa(response: Response, fallback: string): Promise<ConsultaProcessResponse> {
+  const contentType = response.headers.get('content-type') ?? '';
+  if (!contentType.includes('text/event-stream')) {
+    return readApiJson<ConsultaProcessResponse>(response, fallback);
+  }
+  if (!response.body) throw new Error(fallback);
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let complete: ConsultaProcessResponse | null = null;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const chunks = buffer.split('\n\n');
+    buffer = chunks.pop() ?? '';
+    for (const chunk of chunks) {
+      const line = chunk.split('\n').find((item) => item.startsWith('data:')) ?? '';
+      const payload = line.replace(/^data:\s*/, '').trim();
+      if (!payload) continue;
+      try {
+        const event = JSON.parse(payload) as ConsultaProcessResponse & {
+          type?: string;
+          detail?: string;
+          code?: string;
+          guia?: string[];
+          nota?: NotaClinica;
+          faltantes?: Array<{ mensaje: string }>;
+        };
+        if (event.type === 'error') {
+          throwConsultaFailure(event, fallback);
+        }
+        if (event.type === 'complete') complete = event;
+      } catch (err) {
+        if (err instanceof SyntaxError) continue;
+        throw err;
+      }
+    }
+  }
+  if (!complete?.ok && !complete?.nota) throw new Error(fallback);
+  return complete;
 }
 
 class ApiService {
@@ -285,14 +353,14 @@ class ApiService {
     const token = this.getAccessToken();
     const response = await fetch(`${API_BASE}/api/consultas-medicas`, {
       method: 'POST',
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      headers: {
+        Accept: 'text/event-stream, application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
       body: form,
+      signal: AbortSignal.timeout(90_000),
     });
-    const data = (await response.json()) as ConsultaProcessResponse & { detail?: string };
-    if (!response.ok) {
-      throw new Error(data.detail || 'No se pudo procesar la consulta médica.');
-    }
-    return data;
+    return readConsultaIa(response, 'No se pudo procesar la consulta médica.');
   }
 
   async procesarConsultaTexto(
@@ -306,6 +374,7 @@ class ApiService {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        Accept: 'text/event-stream, application/json',
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
       body: JSON.stringify({
@@ -316,8 +385,9 @@ class ApiService {
         medico_cedula: extras.medicoCedula,
         consulta_id: extras.consultaId,
       }),
+      signal: AbortSignal.timeout(90_000),
     });
-    return readApiJson<ConsultaProcessResponse>(response, 'No se pudo procesar la consulta médica.');
+    return readConsultaIa(response, 'No se pudo procesar la consulta médica.');
   }
 
   async getConsulta(id: string): Promise<ConsultaMedica> {

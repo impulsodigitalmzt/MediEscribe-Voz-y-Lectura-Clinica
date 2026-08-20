@@ -32,7 +32,11 @@ export class Nom004Error extends AppError {
   readonly nota?: NotaClinica;
 
   constructor(faltantes: FaltanteNom004[], nota?: NotaClinica) {
-    super(422, "La nota no cumple los requisitos de la NOM-004-SSA3-2012.", "NOM004_INCOMPLETA");
+    super(
+      422,
+      `Complete los datos faltantes antes de persistir el expediente (NOM-004-SSA3 / privacidad por diseño): ${faltantes.map((item) => item.mensaje).join(" ")}`,
+      "NOM004_INCOMPLETA"
+    );
     this.name = "Nom004Error";
     this.faltantes = faltantes;
     this.guia = faltantes.map((item) => item.mensaje);

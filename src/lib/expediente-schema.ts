@@ -102,6 +102,7 @@ export async function ensureExpedienteSchema(sql: Sql): Promise<void> {
       medico_nombre TEXT,
       medico_cedula TEXT,
       medico_id UUID,
+      user_id UUID,
       consentimiento_informado_aceptado BOOLEAN NOT NULL DEFAULT false,
       consentimiento_informado_en TIMESTAMPTZ,
       consentimiento_informado_titular TEXT NOT NULL DEFAULT '',
@@ -545,9 +546,8 @@ function partirNombreLegado(completo: string): { nombre: string; apellidoPaterno
 }
 
 /**
- * La tabla oficial NOM-004 es `consultas` (UUID + paciente_id + nota estructurada).
- * `consultas_medicas` es el modelo suelto anterior (id serial, nombre en texto).
- * Se absorbe y se elimina para que lectura y guardado usen el mismo sitio.
+ * La tabla física de episodios es `consultas`.
+ * Tras absorber el legado serial, `consultas_medicas` queda como vista sobre `consultas`.
  */
 async function migrarConsultasMedicasLegacy(sql: Sql): Promise<void> {
   try {
@@ -717,6 +717,43 @@ async function ensureLfpdppp(sql: Sql): Promise<void> {
 
   await sql`ALTER TABLE pacientes ADD COLUMN IF NOT EXISTS medico_id UUID`;
   await sql`ALTER TABLE consultas ADD COLUMN IF NOT EXISTS medico_id UUID`;
+  await sql`ALTER TABLE consultas ADD COLUMN IF NOT EXISTS user_id UUID`;
+  try {
+    await sql`UPDATE consultas SET user_id = medico_id WHERE user_id IS NULL AND medico_id IS NOT NULL`;
+  } catch {
+    /* ignore */
+  }
+  await sql`CREATE INDEX IF NOT EXISTS ix_consultas_user ON consultas (user_id)`;
+
+  try {
+    await sql.unsafe(`
+      CREATE OR REPLACE FUNCTION consultas_proteger_auditoria()
+      RETURNS trigger AS $fn$
+      BEGIN
+        NEW.user_id := COALESCE(NEW.user_id, NEW.medico_id);
+        NEW.medico_id := COALESCE(NEW.medico_id, NEW.user_id);
+        IF TG_OP = 'UPDATE' THEN
+          NEW.created_at := OLD.created_at;
+        END IF;
+        RETURN NEW;
+      END;
+      $fn$ LANGUAGE plpgsql;
+    `);
+    await sql.unsafe(`DROP TRIGGER IF EXISTS trg_consultas_proteger_auditoria ON consultas`);
+    await sql.unsafe(`
+      CREATE TRIGGER trg_consultas_proteger_auditoria
+      BEFORE INSERT OR UPDATE ON consultas
+      FOR EACH ROW EXECUTE PROCEDURE consultas_proteger_auditoria()
+    `);
+  } catch {
+    /* permisos o versión de PostgreSQL */
+  }
+
+  try {
+    await sql.unsafe(`CREATE OR REPLACE VIEW consultas_medicas AS SELECT * FROM consultas`);
+  } catch {
+    /* si aún existe la tabla legado, la migración la elimina en el siguiente arranque */
+  }
   await sql`ALTER TABLE consultas ADD COLUMN IF NOT EXISTS consentimiento_informado_aceptado BOOLEAN NOT NULL DEFAULT false`;
   await sql`ALTER TABLE consultas ADD COLUMN IF NOT EXISTS consentimiento_informado_en TIMESTAMPTZ`;
   await sql`ALTER TABLE consultas ADD COLUMN IF NOT EXISTS consentimiento_informado_titular TEXT NOT NULL DEFAULT ''`;

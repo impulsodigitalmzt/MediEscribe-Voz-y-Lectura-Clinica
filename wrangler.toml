@@ -1,11 +1,17 @@
-# MedScribe — Cloudflare Workers + Assets (Workers & Pages)
-# SPA: npm run build (Vite) escribe en ./public
+# MediEscribe — Cloudflare Workers & Pages
+# La IA (Groq Whisper + LLM) y Neon corren SOLO en el Worker.
+# El SPA se publica como Assets del Worker (mismo origen) o, si se separa,
+# en Cloudflare Pages con VITE_API_BASE_URL apuntando a este Worker.
 #
 # Dashboard Workers & Pages (integración Git):
 #   Build command:      npm run build
 #   Output directory:   public
 #   Root directory:     /
 #   Node version:       20
+#
+# Frontend en Pages aparte (opcional):
+#   VITE_API_BASE_URL=https://<worker>.workers.dev npm run build --prefix frontend
+#   wrangler secret / vars: ALLOWED_ORIGINS=https://<proyecto>.pages.dev
 #
 # No uses pages_build_output_dir: este proyecto es un Worker con assets
 # (API Hono + SPA). wrangler deploy publica ambos en el mismo origen.
@@ -49,6 +55,8 @@ PHONE_NUMBER_ID = "130281826638326"
 RATE_LIMIT_AUTH_ATTEMPTS = "5"
 RATE_LIMIT_AUTH_WINDOW_MINUTES = "15"
 WHATSAPP_GRAPH_VERSION = "v21.0"
+# Orígenes extra (Pages separado). Vacío = mismo origen + localhost.
+ALLOWED_ORIGINS = ""
 
 # Binding KV: Wrangler provisiona el namespace en el primer deploy si no hay id.
 [[kv_namespaces]]

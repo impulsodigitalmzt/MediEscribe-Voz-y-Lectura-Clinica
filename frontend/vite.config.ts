@@ -9,6 +9,17 @@ export default defineConfig({
     outDir: path.resolve(__dirname, '../public'),
     emptyOutDir: true,
     assetsDir: 'assets',
+    target: 'es2020',
+    sourcemap: false,
+    cssCodeSplit: true,
+    chunkSizeWarningLimit: 700,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          react: ['react', 'react-dom', 'react-router-dom'],
+        },
+      },
+    },
   },
   resolve: {
     alias: {

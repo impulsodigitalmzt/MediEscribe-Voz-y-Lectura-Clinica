@@ -190,8 +190,8 @@ export async function parseConsultaMultipart(c: Context): Promise<ConsultaMultip
   };
 }
 
-export function clipTranscript(text: string, maxWords = 8000): string {
-  const words = text.trim().split(/\s+/);
-  if (words.length <= maxWords) return text.trim();
-  return words.slice(0, maxWords).join(" ");
+export function clipTranscript(text: string, maxChars = 12_000): string {
+  const trimmed = text.trim();
+  if (trimmed.length <= maxChars) return trimmed;
+  return `${trimmed.slice(0, maxChars)}\n\n[Transcripción recortada por límite del Worker]`;
 }

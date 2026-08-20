@@ -6,6 +6,8 @@ import { datosMedicoDesdeSesion, requireAuth, sesionDesdeAuth, type AuthContext 
 import { isAppError } from "../lib/errors";
 import { isNom004Error, NORMA_EXPEDIENTE } from "../lib/guardia-legal";
 import { jsonError } from "../lib/http";
+import { allowedBrowserOrigin, sseConsultaResponse } from "../lib/edge";
+import { logSinPhi } from "../lib/phi";
 import {
   abrirConsultaBorrador,
   actualizarConsulta,
@@ -32,28 +34,42 @@ export const consultaRoutes = new Hono<{ Bindings: Env; Variables: { auth: AuthC
 consultaRoutes.use("*", requireAuth);
 consultaRoutes.use("*", auditExpedienteMiddleware());
 
+function wantsIaStream(c: Context<{ Bindings: Env; Variables: { auth: AuthContext } }>): boolean {
+  return (c.req.header("Accept") ?? "").includes("text/event-stream");
+}
+
 consultaRoutes.post("/", async (c) => {
   try {
     const form = await parseConsultaMultipart(c);
-    const result = await procesarConsultaDesdeAudio(
-      c.env,
-      {
-        audio: form.audio,
-        pacienteId: form.pacienteId,
-        especialidad: form.especialidad,
-        datosMedico: datosMedicoDesdeSesion(c, {
-          medicoNombre: form.medicoNombre,
-          medicoCedula: form.medicoCedula,
-          sexo: form.sexo,
-          domicilio: form.domicilio,
-        }),
-        consultaId: form.consultaId || undefined,
-        sesion: sesionDesdeAuth(c),
-      },
-      c.executionCtx
-    );
+    const run = () =>
+      procesarConsultaDesdeAudio(
+        c.env,
+        {
+          audio: form.audio,
+          pacienteId: form.pacienteId,
+          especialidad: form.especialidad,
+          datosMedico: datosMedicoDesdeSesion(c, {
+            medicoNombre: form.medicoNombre,
+            medicoCedula: form.medicoCedula,
+            sexo: form.sexo,
+            domicilio: form.domicilio,
+          }),
+          consultaId: form.consultaId || undefined,
+          sesion: sesionDesdeAuth(c),
+        },
+        c.executionCtx
+      );
 
-    return c.json(await respuestaConsulta(c.env.SECRET_KEY, result), 201);
+    if (!wantsIaStream(c)) {
+      return c.json(await respuestaConsulta(c.env.SECRET_KEY, await run()), 201);
+    }
+
+    const origin = allowedBrowserOrigin(c.req.header("Origin"), c.req.url, c.env);
+    return sseConsultaResponse(origin, async (send) => {
+      send({ type: "status", step: "whisper" });
+      const result = await run();
+      send({ type: "complete", ...(await respuestaConsulta(c.env.SECRET_KEY, result)) });
+    });
   } catch (error) {
     return consultaError(c, error, "consulta_audio_failed");
   }
@@ -123,32 +139,37 @@ consultaRoutes.post("/texto", async (c) => {
       consultaId = (body.consulta_id ?? "").trim();
     }
 
-    console.log(
-      JSON.stringify({
-        event: "consulta_texto_start",
-        hasGroqApiKey: Boolean(c.env.GROQ_API_KEY),
-        groqApiKeyLength: c.env.GROQ_API_KEY ? c.env.GROQ_API_KEY.length : 0,
-        groqModel: c.env.GROQ_MODEL || "llama-3.3-70b-versatile",
-        transcriptChars: transcripcion.trim().length,
-        consultaId: consultaId || null,
-        pacienteId: pacienteId || null,
-      })
-    );
+    logSinPhi("consulta_texto_start", {
+      hasGroqApiKey: Boolean(c.env.GROQ_API_KEY),
+      groqModel: c.env.GROQ_MODEL || "llama-3.3-70b-versatile",
+      transcriptChars: transcripcion.trim().length,
+      stream: wantsIaStream(c),
+    });
 
-    const result = await procesarConsultaDesdeTexto(
-      c.env,
-      {
-        transcripcion,
-        pacienteId,
-        especialidad,
-        datosMedico: datosMedicoDesdeSesion(c, { medicoNombre, medicoCedula, sexo, domicilio }),
-        consultaId: consultaId || undefined,
-        sesion: sesionDesdeAuth(c),
-      },
-      c.executionCtx
-    );
+    const run = () =>
+      procesarConsultaDesdeTexto(
+        c.env,
+        {
+          transcripcion,
+          pacienteId,
+          especialidad,
+          datosMedico: datosMedicoDesdeSesion(c, { medicoNombre, medicoCedula, sexo, domicilio }),
+          consultaId: consultaId || undefined,
+          sesion: sesionDesdeAuth(c),
+        },
+        c.executionCtx
+      );
 
-    return c.json(await respuestaConsulta(c.env.SECRET_KEY, result), 201);
+    if (!wantsIaStream(c)) {
+      return c.json(await respuestaConsulta(c.env.SECRET_KEY, await run()), 201);
+    }
+
+    const origin = allowedBrowserOrigin(c.req.header("Origin"), c.req.url, c.env);
+    return sseConsultaResponse(origin, async (send) => {
+      send({ type: "status", step: "sintesis" });
+      const result = await run();
+      send({ type: "complete", ...(await respuestaConsulta(c.env.SECRET_KEY, result)) });
+    });
   } catch (error) {
     return consultaError(c, error, "consulta_texto_failed");
   }
@@ -402,7 +423,7 @@ async function respuestaConsulta(
   return {
     ok: true,
     consulta: await publicConsulta(result.row, result.paciente, phiSecret),
-    transcripcion: result.transcripcion,
+    transcripcion: result.transcripcion || "",
     nota: result.nota,
     receta: result.receta,
     paciente: result.paciente,

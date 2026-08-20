@@ -3,6 +3,7 @@ import { AppError } from "./errors";
 import { transcribeAudio } from "./groq";
 import { ensureExpedienteSchema } from "./expediente-schema";
 import { aplicarIdentidadPaciente, aplicarSelloLegal, notaDesdeExpediente, recetaDesdeNota, redactarNotaClinica, type DatosMedico, type NotaClinica, type RecetaPaciente } from "./nota-clinica";
+import { exigirSoapClinico, parseSoapClinico } from "./soap-ia";
 import {
   consultaInmutable,
   ESTADO_BORRADOR,
@@ -24,7 +25,7 @@ import {
 import type { NotaAclaracionPublica } from "./aclaraciones";
 import { denegarSiAjeno, esRolPrivilegiado, type SesionMedico } from "./acceso-expediente";
 import { exigirConsentimientoConsulta } from "./consentimiento";
-import { cifrarPhi, descifrarPhi } from "./phi";
+import { cifrarPhi } from "./phi";
 
 export type ConsultaMedicaRow = {
   id: string;
@@ -135,14 +136,11 @@ export async function ensureConsultasSchema(sql: Sql): Promise<void> {
 export async function publicConsulta(
   row: ConsultaMedicaRow,
   paciente?: PacientePublico,
-  phiSecret?: string
+  _phiSecret?: string
 ): Promise<ConsultaPublica> {
   const nota = parseNota(row.nota_estructurada);
   const fechaHora = row.fecha_hora instanceof Date ? row.fecha_hora.toISOString() : String(row.fecha_hora);
   const pacienteNombre = paciente?.nombre_completo || row.paciente_nombre || nota?.nombre_paciente || "";
-  const transcripcion = phiSecret
-    ? await descifrarPhi(phiSecret, row.transcripcion)
-    : row.transcripcion;
   return {
     id: String(row.id),
     paciente_id: String(row.paciente_id),
@@ -151,7 +149,7 @@ export async function publicConsulta(
     paciente_nombre: pacienteNombre,
     paciente,
     resumen: row.resumen,
-    transcripcion,
+    transcripcion: null,
     nota_estructurada: nota,
     motivo_consulta: row.motivo_consulta,
     exploracion_fisica: row.exploracion_fisica,
@@ -212,8 +210,8 @@ function parseRecetaRow(value: ConsultaMedicaRow["receta_paciente_nativo"]): Rec
 }
 
 /**
- * Episodios clínicos. Tabla oficial: `consultas` (NOM-004).
- * No usar `consultas_medicas` (legado absorbido al arrancar el Worker).
+ * Episodios clínicos. Tabla física: `consultas`. Vista canónica: `consultas_medicas`.
+ * `user_id` (= medico_id) es obligatorio para control de acceso LFPDPPP.
  */
 export async function insertConsulta(
   sql: Sql,
@@ -232,6 +230,10 @@ export async function insertConsulta(
     phiSecret?: string;
   }
 ): Promise<ConsultaMedicaRow> {
+  const userId = (input.medicoId ?? "").trim();
+  if (!isUuid(userId)) {
+    throw new AppError(401, "La consulta debe quedar asociada al médico autenticado (user_id).", "CONSULTA_USER_REQUIRED");
+  }
   const transcripcion = input.phiSecret
     ? await cifrarPhi(input.phiSecret, input.transcripcion)
     : input.transcripcion;
@@ -240,7 +242,7 @@ export async function insertConsulta(
       paciente_id, motivo_consulta, exploracion_fisica, diagnostico, tratamiento,
       notas_evolucion, padecimiento_actual, plan, resumen, transcripcion, nota_estructurada,
       receta_paciente_nativo, idioma, especialidad, modelo_whisper, modelo_llm, nombre_archivo, estado,
-      medico_nombre, medico_cedula, medico_id
+      medico_nombre, medico_cedula, medico_id, user_id
     ) VALUES (
       ${input.pacienteId}::uuid,
       ${input.nota.motivo_consulta},
@@ -262,7 +264,8 @@ export async function insertConsulta(
       ${ESTADO_BORRADOR},
       ${input.nota.medico_nombre},
       ${input.nota.medico_cedula},
-      ${input.medicoId ?? null}
+      ${userId}::uuid,
+      ${userId}::uuid
     )
     RETURNING
       id, paciente_id, fecha_hora, resumen, transcripcion, nota_estructurada, receta_paciente_nativo,
@@ -516,6 +519,18 @@ export async function procesarConsultaDesdeTexto(
   const nota = notaExpedienteLegal(documentacion.nota, paciente, input.datosMedico ?? {});
   const receta = documentacion.receta;
   const idioma = documentacion.idioma_detectado || input.idiomaDetectado || "es";
+  exigirSoapClinico(
+    parseSoapClinico({
+      subjetivo: nota.subjetivo || nota.padecimiento_actual,
+      objetivo: nota.objetivo || nota.exploracion_fisica,
+      analisis: nota.analisis || nota.diagnostico,
+      plan_tratamiento: nota.plan,
+      medicamentos: nota.tratamiento,
+      diagnostico_cie10: nota.diagnostico_cie10,
+      pronostico: nota.pronostico,
+    }),
+    nota
+  );
 
   const row = await withSql(env, ctx, async (sql) => {
     if (input.consultaId) {
@@ -549,7 +564,7 @@ export async function procesarConsultaDesdeTexto(
     });
   });
 
-  return { transcripcion, nota, receta, row, paciente, guardia_legal: validarNotaNom004(nota) };
+  return { transcripcion: "", nota, receta, row, paciente, guardia_legal: validarNotaNom004(nota) };
 }
 
 export async function guardarDocumentacionConsulta(

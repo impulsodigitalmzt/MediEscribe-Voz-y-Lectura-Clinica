@@ -10,7 +10,7 @@ type Props = {
   onAudioFile: (file: File | null) => void;
   generating: boolean;
   onGenerateText: (texto: string) => void;
-  onGenerateAudio: () => void;
+  onGenerateAudio: (file?: File) => void;
   onRecordingStart?: () => void;
 };
 
@@ -39,30 +39,25 @@ export default function VoiceDictationPanel({
     void start();
   };
 
-  const procesarNota = (texto: string) => {
-    onGenerateText(texto.trim());
-  };
-
-  const handleStopAndProcess = () => {
+  const handleStopAndProcess = async () => {
     const texto = textoCaja;
     if (texto !== dictado) onDictado(texto);
     setShowWaves(false);
-    stop();
-    window.setTimeout(() => {
-      procesarNota(dictadoRef.current || texto);
-    }, 350);
-  };
-
-  const handleGenerarTexto = () => {
-    const texto = textoCaja;
-    if (capturing) {
-      if (texto !== dictado) onDictado(texto);
-      setShowWaves(false);
-      stop();
-      window.setTimeout(() => procesarNota(dictadoRef.current || texto), 350);
+    const file = await stop();
+    if (file) {
+      onAudioFile(file);
+      onGenerateAudio(file);
       return;
     }
-    procesarNota(texto);
+    onGenerateText(dictadoRef.current || texto);
+  };
+
+  const handleGenerarTexto = async () => {
+    if (capturing) {
+      await handleStopAndProcess();
+      return;
+    }
+    onGenerateText(textoCaja.trim());
   };
 
   return (
@@ -71,7 +66,8 @@ export default function VoiceDictationPanel({
         <div>
           <h2 className="text-sm font-semibold text-slate-800">Copiloto de dictado</h2>
           <p className="text-sm text-slate-600">
-            Dicte, pegue texto o suba audio. La IA sintetiza SOAP (no copia el dictado) y ordena vitales, CIE-10 y receta.
+            Las ondas capturan el audio de forma continua (MediaRecorder) y lo envían al Worker para Whisper y SOAP.
+            El texto crudo no se muestra en la nota.
           </p>
         </div>
         <span className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-teal-800 bg-teal-50 border border-teal-200 rounded-full px-2 py-1">
@@ -87,7 +83,7 @@ export default function VoiceDictationPanel({
               ? 'btn-danger py-3.5 px-6 text-base font-semibold shadow-lg shadow-red-600/30 min-h-[52px] voice-record-btn is-recording'
               : 'btn-primary py-3.5 px-6 text-base font-semibold shadow-lg shadow-teal-600/30 min-h-[52px] voice-record-btn'
           }
-          onClick={capturing ? handleStopAndProcess : handleStart}
+          onClick={capturing ? () => void handleStopAndProcess() : handleStart}
           disabled={generating}
         >
           {capturing ? <Square className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
@@ -108,12 +104,12 @@ export default function VoiceDictationPanel({
       {capturing ? (
         <div className="rounded-xl border-2 border-teal-400 bg-teal-950/5 p-3 space-y-2">
           <p className="text-xs font-semibold text-teal-800">
-            {micLive ? 'Micrófono con señal · ondas en tiempo real' : 'Escuchando · hable cerca del micrófono'}
+            {micLive ? 'Stream continuo al Worker · micrófono con señal' : 'Grabando · el recorte de 1 s evita huecos si el dictado se reinicia'}
           </p>
           <VoiceEqualizer levelsRef={levelsRef} live={micLive} />
           {!supported ? (
             <p className="text-xs text-amber-800">
-              Este navegador no transcribe en vivo. Las ondas confirman el micrófono; use Chrome o Edge, o suba un archivo para Whisper.
+              Use Chrome o Edge. El audio se envía a Whisper aunque el dictado en vivo no esté disponible.
             </p>
           ) : null}
         </div>
@@ -121,21 +117,21 @@ export default function VoiceDictationPanel({
 
       <details
         className="rounded-xl border border-slate-200 bg-slate-50 p-3"
-        open={mostrarDictado || capturing}
+        open={mostrarDictado}
         onToggle={(e) => setMostrarDictado((e.target as HTMLDetailsElement).open)}
       >
         <summary className="text-xs font-semibold text-slate-600 cursor-pointer">
-          Dictado crudo (dato sensible · oculto por defecto)
+          Pegar texto (opcional · no se muestra en el SOAP)
         </summary>
         <textarea
           value={textoCaja}
           onChange={(e) => onDictado(e.target.value)}
-          placeholder="El texto bruto se usa solo para sintetizar la nota. No se muestra en el resumen SOAP."
-          className="mt-2 w-full min-h-[120px] p-3 rounded-lg border border-slate-200 text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-teal-500 bg-white"
+          placeholder="Solo si necesita pegar una transcripción. El dictado por voz usa el audio completo."
+          className="mt-2 w-full min-h-[96px] p-3 rounded-lg border border-slate-200 text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-teal-500 bg-white"
         />
       </details>
       <div className="flex flex-wrap gap-2 items-center">
-        <button type="button" className="btn-secondary py-2 px-4 text-sm" disabled={!audioFile || generating} onClick={onGenerateAudio}>
+        <button type="button" className="btn-secondary py-2 px-4 text-sm" disabled={!audioFile || generating} onClick={() => onGenerateAudio()}>
           {generating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Mic className="w-3.5 h-3.5" />}
           Audio → SOAP
         </button>
@@ -143,7 +139,7 @@ export default function VoiceDictationPanel({
           type="button"
           className="btn-primary py-2.5 px-5 text-sm font-semibold"
           disabled={generating}
-          onClick={handleGenerarTexto}
+          onClick={() => void handleGenerarTexto()}
         >
           {generating ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileText className="w-4 h-4" />}
           {generating ? 'Sintetizando nota…' : 'Generar SOAP desde texto'}

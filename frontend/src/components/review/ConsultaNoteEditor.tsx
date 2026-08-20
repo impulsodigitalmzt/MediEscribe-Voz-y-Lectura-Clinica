@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useAuth } from '../../hooks/useAuth';
-import api from '../../services/api';
+import api, { ConsultaValidacionError } from '../../services/api';
 import type { ConsultaHistorialItem, ConsultaMedica, DictamenNom004, NotaAclaracion, NotaClinica, RecetaPaciente } from '../../types';
 import {
   AlertCircle, AlertTriangle, ArrowLeft, CheckCircle2, Copy, Download, FileText, Loader2, Mic, Plus, Printer, Save, Trash2, Upload,
@@ -20,6 +20,7 @@ const EMPTY_NOTA: NotaClinica = {
   }, estudios: '', solicitudes_estudio: [], diagnostico_presuntivo: '',
   diagnosticos_diferenciales: '', diagnostico: '', diagnostico_cie10: '', pronostico: '', plan: '',
   tratamiento: [], seguimiento: '', notas_evolucion: '', resumen: '',
+  subjetivo: '', objetivo: '', analisis: '',
   campos_inciertos: [], secciones_faltantes: [], sello_responsable: '',
 };
 
@@ -84,7 +85,6 @@ export default function ConsultaNoteEditor() {
     setGuardia(row.guardia_legal);
     setHistorial((prev) => row.historial ?? prev);
     setAclaraciones(row.aclaraciones ?? []);
-    if (row.transcripcion) setDictado(row.transcripcion);
   };
 
   useEffect(() => {
@@ -130,10 +130,14 @@ export default function ConsultaNoteEditor() {
       hydrate(result.consulta);
       if (result.nota) setNota({ ...EMPTY_NOTA, ...result.nota });
       if (result.receta) setReceta({ ...EMPTY_RECETA, ...result.receta, medicamentos: result.receta.medicamentos ?? [] });
-      if (result.transcripcion) setDictado(result.transcripcion);
       setGuardia(result.guardia_legal);
-      setSavedMsg('Nota y receta generadas sobre el expediente maestro. Revisa y guarda.');
+      setSavedMsg('Nota SOAP sintetizada. El dictado crudo no se muestra. Revise y guarde.');
     } catch (err) {
+      if (err instanceof ConsultaValidacionError) {
+        if (err.nota) setNota({ ...EMPTY_NOTA, ...err.nota });
+        setError(`Complete los datos faltantes: ${err.guia.join(' ')}`);
+        return;
+      }
       setError(err instanceof Error ? err.message : 'No se pudo generar la nota.');
     } finally {
       setGenerating(false);
@@ -149,10 +153,14 @@ export default function ConsultaNoteEditor() {
       hydrate(result.consulta);
       if (result.nota) setNota({ ...EMPTY_NOTA, ...result.nota });
       if (result.receta) setReceta({ ...EMPTY_RECETA, ...result.receta, medicamentos: result.receta.medicamentos ?? [] });
-      if (result.transcripcion) setDictado(result.transcripcion);
       setGuardia(result.guardia_legal);
-      setSavedMsg('Audio transcrito. Nota y receta ligadas al expediente. Revisa y guarda.');
+      setSavedMsg('Audio enviado al Worker (Whisper → SOAP). El dictado crudo no se muestra. Revise y guarde.');
     } catch (err) {
+      if (err instanceof ConsultaValidacionError) {
+        if (err.nota) setNota({ ...EMPTY_NOTA, ...err.nota });
+        setError(`Complete los datos faltantes: ${err.guia.join(' ')}`);
+        return;
+      }
       setError(err instanceof Error ? err.message : 'No se pudo procesar el audio.');
     } finally {
       setGenerating(false);

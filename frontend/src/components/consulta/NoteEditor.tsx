@@ -107,7 +107,12 @@ export default function NoteEditor({
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 items-start">
         <SoapCard id="soap-s" letter="S" title="Subjetivo" hint="Motivo, padecimiento e interrogatorio (NOM-004 6.1.1)">
           <Area label="Motivo de consulta" value={nota.motivo_consulta} onChange={(v) => setField('motivo_consulta', v)} locked={locked} compact />
-          <Area label="Padecimiento actual" value={nota.padecimiento_actual} onChange={(v) => setField('padecimiento_actual', v)} locked={locked} />
+          <Area
+            label="Subjetivo / padecimiento actual"
+            value={nota.subjetivo || nota.padecimiento_actual}
+            onChange={(v) => onNota({ ...nota, subjetivo: v, padecimiento_actual: v })}
+            locked={locked}
+          />
           <Area label="Interrogatorio" value={nota.interrogatorio} onChange={(v) => setField('interrogatorio', v)} locked={locked} />
         </SoapCard>
 
@@ -137,14 +142,25 @@ export default function NoteEditor({
               </p>
             ) : null}
           </div>
-          <Area label="Exploración física" value={nota.exploracion_fisica} onChange={(v) => setField('exploracion_fisica', v)} locked={locked} />
+          <Area
+            label="Objetivo / exploración física"
+            value={nota.objetivo || nota.exploracion_fisica}
+            onChange={(v) => onNota({ ...nota, objetivo: v, exploracion_fisica: v })}
+            locked={locked}
+          />
           <Area label="Estudios" value={nota.estudios} onChange={(v) => setField('estudios', v)} locked={locked} compact />
         </SoapCard>
 
         <SoapCard id="soap-a" letter="A" title="Análisis" hint="Diagnóstico CIE-10, presuntivo y pronóstico (NOM-004 6.1.4 / 6.1.5)">
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
             <div className="sm:col-span-2">
-              <Area label="Diagnóstico" value={nota.diagnostico} onChange={(v) => setField('diagnostico', v)} locked={locked} compact />
+              <Area
+                label="Análisis / diagnóstico"
+                value={nota.analisis || nota.diagnostico}
+                onChange={(v) => onNota({ ...nota, analisis: v, diagnostico: v })}
+                locked={locked}
+                compact
+              />
             </div>
             <label className="block">
               <span className="section-header">CIE-10</span>

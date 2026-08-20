@@ -1,5 +1,4 @@
 import { Hono } from "hono";
-import { cors } from "hono/cors";
 import { authRoutes } from "./routes/auth";
 import { consultaRoutes } from "./routes/consultas";
 import { encounterRoutes } from "./routes/encounters";
@@ -9,25 +8,21 @@ import { whatsappRoutes } from "./routes/whatsapp";
 import { handleAudioWebSocket } from "./routes/ws";
 import { isAppError } from "./lib/errors";
 import { isNom004Error, NORMA_EXPEDIENTE } from "./lib/guardia-legal";
-import { securityHeaders } from "./lib/http";
+import { allowedBrowserOrigin, applyCorsHeaders, applySecurityHeaders } from "./lib/edge";
 
 const api = new Hono<{ Bindings: Env }>();
 
-api.use(
-  "*",
-  cors({
-    origin: (origin) => origin || "*",
-    allowMethods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
-    allowHeaders: ["Authorization", "Content-Type"],
-    maxAge: 86400,
-  })
-);
-
 api.use("*", async (c, next) => {
-  await next();
-  for (const [key, value] of Object.entries(securityHeaders())) {
-    c.res.headers.set(key, value);
+  const origin = allowedBrowserOrigin(c.req.header("Origin"), c.req.url, c.env);
+  if (c.req.method === "OPTIONS") {
+    const headers = new Headers();
+    applyCorsHeaders(headers, origin);
+    applySecurityHeaders(headers);
+    return new Response(null, { status: 204, headers });
   }
+  await next();
+  applyCorsHeaders(c.res.headers, origin);
+  applySecurityHeaders(c.res.headers);
 });
 
 api.get("/health", (c) =>

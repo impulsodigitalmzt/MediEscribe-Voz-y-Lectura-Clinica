@@ -4,7 +4,7 @@ import {
   AlertCircle, AlertTriangle, ArrowLeft, CheckCircle2, Download, FileText, Loader2, Lock, Save,
 } from 'lucide-react';
 import { useAuth } from '../../hooks/useAuth';
-import api from '../../services/api';
+import api, { ConsultaValidacionError } from '../../services/api';
 import type { ConsultaMedica, DictamenNom004, NotaAclaracion, NotaClinica, RecetaPaciente } from '../../types';
 import PhysicianIdentityBar from './PhysicianIdentityBar';
 import VoiceDictationPanel from './VoiceDictationPanel';
@@ -79,7 +79,6 @@ export default function ConsultaWorkspace() {
     });
     setGuardia(row.guardia_legal);
     setAclaraciones(row.aclaraciones ?? []);
-    if (row.transcripcion) setDictado(row.transcripcion);
   };
 
   useEffect(() => {
@@ -191,17 +190,21 @@ export default function ConsultaWorkspace() {
       if (result.consulta) hydrate(result.consulta);
       aplicarNotaGenerada(result.nota ?? result.consulta?.nota_estructurada ?? undefined, stamp.fecha, stamp.hora);
       if (result.receta) setReceta({ ...EMPTY_RECETA, ...result.receta, medicamentos: result.receta.medicamentos ?? [] });
-      setDictado(result.transcripcion || texto);
       setGuardia(result.guardia_legal);
-      setSavedMsg('Nota SOAP sintetizada (NOM-004). Revise S-O-A-P y guarde. El dictado crudo queda oculto.');
+      setSavedMsg('Nota SOAP sintetizada (NOM-004). Revise S-O-A-P y guarde. El dictado crudo no se muestra.');
     } catch (err) {
+      if (err instanceof ConsultaValidacionError) {
+        if (err.nota) aplicarNotaGenerada(err.nota, nota.fecha, nota.hora);
+        setError(`Complete los datos faltantes: ${err.guia.join(' ')}`);
+        return;
+      }
       setError(err instanceof Error ? err.message : 'No se pudo generar la nota.');
     } finally {
       setGenerating(false);
     }
   };
 
-  const handleGenerarDesdeAudio = async () => {
+  const handleGenerarDesdeAudio = async (file?: File) => {
     if (locked) {
       setError('La consulta está bloqueada.');
       return;
@@ -214,10 +217,12 @@ export default function ConsultaWorkspace() {
       setError('No hay una consulta abierta.');
       return;
     }
-    if (!audioFile) {
+    const audio = file ?? audioFile;
+    if (!audio) {
       setError('Seleccione un archivo de audio.');
       return;
     }
+    setAudioFile(audio);
     setGenerating(true);
     setError('');
     setSavedMsg('');
@@ -238,14 +243,18 @@ export default function ConsultaWorkspace() {
       if (!nota.fecha || !nota.hora) {
         setNota((n) => ({ ...n, fecha: stamp.fecha, hora: stamp.hora }));
       }
-      const result = await api.procesarConsultaAudio(audioFile, pid, especialidad, extras);
+      const result = await api.procesarConsultaAudio(audio, pid, especialidad, extras);
       if (result.consulta) hydrate(result.consulta);
       aplicarNotaGenerada(result.nota ?? result.consulta?.nota_estructurada ?? undefined, stamp.fecha, stamp.hora);
       if (result.receta) setReceta({ ...EMPTY_RECETA, ...result.receta, medicamentos: result.receta.medicamentos ?? [] });
-      if (result.transcripcion) setDictado(result.transcripcion);
       setGuardia(result.guardia_legal);
-      setSavedMsg('Audio transcrito y sintetizado en SOAP. Revise vitales, CIE-10 y receta, luego guarde.');
+      setSavedMsg('Audio enviado al Worker (Whisper → SOAP). Revise CIE-10 y receta, luego guarde.');
     } catch (err) {
+      if (err instanceof ConsultaValidacionError) {
+        if (err.nota) aplicarNotaGenerada(err.nota, nota.fecha, nota.hora);
+        setError(`Complete los datos faltantes: ${err.guia.join(' ')}`);
+        return;
+      }
       setError(err instanceof Error ? err.message : 'No se pudo procesar el audio.');
     } finally {
       setGenerating(false);

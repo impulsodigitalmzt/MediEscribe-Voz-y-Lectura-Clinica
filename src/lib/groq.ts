@@ -1,5 +1,14 @@
 import { AppError } from "./errors";
 import { extractClinicalEntities, mapToNoteSections } from "./nlp";
+import {
+  GROQ_CHAT_TIMEOUT_MS,
+  GROQ_WHISPER_TIMEOUT_MS,
+  MAX_GROQ_JSON_CHARS,
+  fetchTimeout,
+  groqTimeoutError,
+  isTimeoutError,
+} from "./edge";
+import { logSinPhi } from "./phi";
 
 const SYSTEM_PROMPT = `You are MedScribe's clinical documentation engine. Transform raw clinical conversation extracts into polished, professional, detailed medical documentation.
 
@@ -37,21 +46,12 @@ function maxTokensForModel(model: string, requested?: number): number {
 }
 
 function logGroq(event: string, payload: Record<string, unknown>): void {
-  console.log(
-    JSON.stringify({
-      event,
-      ts: new Date().toISOString(),
-      ...payload,
-    })
-  );
+  logSinPhi(event, payload);
 }
 
 function groqKeyMeta(env: Env): Record<string, unknown> {
-  const key = env.GROQ_API_KEY ?? "";
   return {
-    hasGroqApiKey: Boolean(key),
-    groqApiKeyLength: key.length,
-    groqApiKeyPrefix: key ? `${key.slice(0, 4)}…` : "",
+    hasGroqApiKey: Boolean(env.GROQ_API_KEY),
     groqModel: env.GROQ_MODEL || "llama-3.3-70b-versatile",
   };
 }
@@ -73,10 +73,48 @@ function shrinkMessages(messages: GroqChatMessage[], maxChars: number): GroqChat
   });
 }
 
+async function readGroqStreamContent(response: Response, maxChars: number): Promise<string> {
+  if (!response.body) {
+    const data = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
+    return data.choices?.[0]?.message?.content ?? "";
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let content = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith("data:")) continue;
+      const payload = trimmed.slice(5).trim();
+      if (!payload || payload === "[DONE]") continue;
+      try {
+        const json = JSON.parse(payload) as {
+          choices?: Array<{ delta?: { content?: string }; message?: { content?: string } }>;
+        };
+        const chunk = json.choices?.[0]?.delta?.content ?? json.choices?.[0]?.message?.content ?? "";
+        if (chunk) content += chunk;
+        if (content.length > maxChars) {
+          await reader.cancel().catch(() => undefined);
+          throw new AppError(502, "La nota generada excedió el tamaño permitido.", "GROQ_RESPONSE_TOO_LARGE");
+        }
+      } catch (error) {
+        if (error instanceof AppError) throw error;
+      }
+    }
+  }
+  return content;
+}
+
 export async function groqChatJson(
   env: Env,
   messages: GroqChatMessage[],
-  options?: { temperature?: number; maxTokens?: number }
+  options?: { temperature?: number; maxTokens?: number; timeoutMs?: number; stream?: boolean }
 ): Promise<Record<string, unknown>> {
   if (!env.GROQ_API_KEY) {
     logGroq("groq_chat_missing_key", {
@@ -92,49 +130,49 @@ export async function groqChatJson(
   const userChars = messages.find((m) => m.role === "user")?.content.length ?? 0;
   const groqUrl = "https://api.groq.com/openai/v1/chat/completions";
   let omitirStore = false;
+  let useStream = options?.stream !== false;
+  const timeoutMs = options?.timeoutMs ?? GROQ_CHAT_TIMEOUT_MS;
 
   logGroq("groq_chat_request", {
     ...groqKeyMeta(env),
     maxTokens,
     userChars,
     messageCount: messages.length,
+    stream: useStream,
     privacy: { store: false, training: "forbidden" },
   });
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    console.log("[IA] ANTES de la llamada al modelo", {
-      provider: "groq",
-      url: groqUrl,
-      model,
-      attempt,
-      maxTokens,
-      userChars,
-      messageCount: payload.length,
-    });
-
     const body: Record<string, unknown> = {
       model,
       temperature: options?.temperature ?? 0.2,
       max_tokens: maxTokens,
       response_format: { type: "json_object" },
       messages: payload,
+      stream: useStream,
     };
     if (!omitirStore) body.store = false;
 
-    const response = await fetch(groqUrl, {
-      method: "POST",
-      headers: groqPrivacyHeaders(env),
-      body: JSON.stringify(body),
-    });
+    let response: Response;
+    try {
+      response = await fetch(groqUrl, {
+        method: "POST",
+        headers: groqPrivacyHeaders(env),
+        body: JSON.stringify(body),
+        signal: fetchTimeout(timeoutMs),
+      });
+    } catch (error) {
+      if (isTimeoutError(error)) throw groqTimeoutError("chat");
+      throw error;
+    }
 
     const errText = response.ok ? "" : await response.text();
-    console.log("[IA] DESPUÉS de la llamada al modelo", {
-      provider: "groq",
-      model,
+    logGroq("groq_chat_http", {
+      ...groqKeyMeta(env),
       attempt,
       httpStatus: response.status,
       ok: response.ok,
-      errorPreview: errText ? errText.slice(0, 400) : null,
+      stream: useStream,
     });
     if (!response.ok) {
       const authFail = response.status === 401 || response.status === 403;
@@ -142,13 +180,13 @@ export async function groqChatJson(
         ...groqKeyMeta(env),
         httpStatus: response.status,
         attempt,
-        body: errText.slice(0, 800),
-        hint: authFail
-          ? "API key inválida o sin permiso. Revise wrangler secret put GROQ_API_KEY."
-          : undefined,
+        bodyChars: errText.length,
       });
       if ((response.status === 400 || response.status === 413) && attempt === 0) {
-        if (response.status === 400) omitirStore = true;
+        if (response.status === 400) {
+          omitirStore = true;
+          useStream = false;
+        }
         if (response.status === 413) {
           maxTokens = Math.min(maxTokens, 900);
           payload = shrinkMessages(payload, 3500);
@@ -164,25 +202,36 @@ export async function groqChatJson(
       );
     }
 
-    const data = (await response.json()) as {
-      choices?: Array<{ message?: { content?: string } }>;
-      error?: { message?: string; type?: string };
-    };
-    const content = data.choices?.[0]?.message?.content ?? "";
-    console.log("[IA] DESPUÉS de la llamada al modelo (contenido)", {
-      provider: "groq",
-      model,
-      attempt,
-      contentChars: content.length,
-    });
+    let content = "";
+    try {
+      if (useStream) {
+        content = await readGroqStreamContent(response, MAX_GROQ_JSON_CHARS);
+      } else {
+        const data = (await response.json()) as {
+          choices?: Array<{ message?: { content?: string } }>;
+          error?: { message?: string };
+        };
+        content = data.choices?.[0]?.message?.content ?? "";
+        if (content.length > MAX_GROQ_JSON_CHARS) {
+          throw new AppError(502, "La nota generada excedió el tamaño permitido.", "GROQ_RESPONSE_TOO_LARGE");
+        }
+      }
+    } catch (error) {
+      if (isTimeoutError(error)) throw groqTimeoutError("chat");
+      throw error;
+    }
+
     logGroq("groq_chat_raw_content", {
       ...groqKeyMeta(env),
       httpStatus: response.status,
       contentChars: content.length,
-      groqError: data.error?.message ?? null,
       privacy: { store: false, training: "forbidden" },
     });
     if (!content.trim()) {
+      if (useStream && attempt === 0) {
+        useStream = false;
+        continue;
+      }
       throw new AppError(502, "Groq devolvió una respuesta vacía.", "GROQ_EMPTY_RESPONSE");
     }
     try {
@@ -201,19 +250,12 @@ export async function groqChatJson(
             : typeof nota?.plan === "string"
               ? nota.plan.length
               : 0,
-        medicamentosChars:
-          typeof nota?.medicamentos === "string"
-            ? nota.medicamentos.length
-            : Array.isArray(nota?.medicamentos)
-              ? nota.medicamentos.length
-              : 0,
-        motivoPreview: typeof nota?.motivo_consulta === "string" ? nota.motivo_consulta.slice(0, 220) : null,
       });
       return parsed;
     } catch (parseError) {
       logGroq("groq_chat_invalid_json", {
         message: parseError instanceof Error ? parseError.message : "parse_error",
-        contentPreview: content.slice(0, 800),
+        contentChars: content.length,
       });
       throw new AppError(502, "Groq devolvió JSON inválido para la nota médica.", "GROQ_INVALID_JSON");
     }
@@ -315,17 +357,21 @@ export async function transcribeAudio(
   form.append("response_format", "verbose_json");
   form.append("temperature", "0");
 
-  const response = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${env.GROQ_API_KEY}` },
-    body: form,
-  });
+  let response: Response;
+  try {
+    response = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${env.GROQ_API_KEY}` },
+      body: form,
+      signal: fetchTimeout(GROQ_WHISPER_TIMEOUT_MS),
+    });
+  } catch (error) {
+    if (isTimeoutError(error)) throw groqTimeoutError("whisper");
+    throw error;
+  }
 
   if (!response.ok) {
-    const errText = await response.text();
-    console.error(
-      JSON.stringify({ event: "groq_whisper_failed", status: response.status, body: errText.slice(0, 300) })
-    );
+    logGroq("groq_whisper_failed", { status: response.status });
     throw new AppError(502, "No se pudo transcribir el audio con Whisper.", "GROQ_WHISPER_FAILED");
   }
 

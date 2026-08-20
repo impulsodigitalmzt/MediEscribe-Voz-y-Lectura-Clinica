@@ -117,6 +117,7 @@ export function notaClinicaVacia(): NotaClinica {
     solicitudes_estudio: [], diagnostico_presuntivo: '', diagnosticos_diferenciales: '',
     diagnostico: '', diagnostico_cie10: '', pronostico: '', plan: '',
     tratamiento: [], seguimiento: '', notas_evolucion: '', resumen: '',
+    subjetivo: '', objetivo: '', analisis: '',
     campos_inciertos: [], secciones_faltantes: [], sello_responsable: '',
   };
 }
@@ -148,6 +149,9 @@ export function mapearNotaDesdeIA(
   mapped.plan = asTexto(raw.plan_tratamiento) || asTexto(raw.plan) || mapped.plan;
   mapped.medicamentos = asTexto(raw.medicamentos) || mapped.medicamentos;
   mapped.pronostico = asTexto(raw.pronostico) || asTexto(raw.pronóstico) || mapped.pronostico;
+  mapped.subjetivo = asTexto(raw.subjetivo) || mapped.padecimiento_actual || mapped.subjetivo;
+  mapped.objetivo = asTexto(raw.objetivo) || mapped.exploracion_fisica || mapped.objetivo;
+  mapped.analisis = asTexto(raw.analisis) || mapped.diagnostico || mapped.analisis;
   mapped.estudios = asTexto(raw.estudios) || mapped.solicitudes_estudio.join('; ') || mapped.estudios;
   if (!mapped.signos_vitales) mapped.signos_vitales = vacioSignosVitales();
   if (!Array.isArray(mapped.solicitudes_estudio)) mapped.solicitudes_estudio = [];

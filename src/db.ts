@@ -1,4 +1,14 @@
-import { neon } from "@neondatabase/serverless";
+import { neon, neonConfig } from "@neondatabase/serverless";
+import { NEON_FETCH_TIMEOUT_MS } from "./lib/edge";
+
+neonConfig.fetchFunction = (input: string | URL | Request, init?: RequestInit) =>
+  fetch(input, {
+    ...init,
+    cache: "no-store",
+    signal: init?.signal
+      ? AbortSignal.any([init.signal, AbortSignal.timeout(NEON_FETCH_TIMEOUT_MS)])
+      : AbortSignal.timeout(NEON_FETCH_TIMEOUT_MS),
+  });
 
 /**
  * Cliente Neon HTTP para Cloudflare Workers.

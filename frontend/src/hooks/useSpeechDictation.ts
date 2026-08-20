@@ -35,6 +35,14 @@ function getAudioContextConstructor(): (new () => AudioContext) | undefined {
   return win.AudioContext || win.webkitAudioContext;
 }
 
+function pickRecorderMime(): string {
+  const candidates = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4'];
+  for (const type of candidates) {
+    if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(type)) return type;
+  }
+  return 'audio/webm';
+}
+
 async function openClinicalMic(): Promise<MediaStream> {
   try {
     const stream = await navigator.mediaDevices.getUserMedia(MIC_CONSTRAINTS);
@@ -63,26 +71,32 @@ export function useSpeechDictation(onFinal: (transcript: string) => void) {
   const wantListenRef = useRef(false);
   const onFinalRef = useRef(onFinal);
   const analyserCleanupRef = useRef<(() => void) | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  const mimeRef = useRef('audio/webm');
   onFinalRef.current = onFinal;
 
-  const stopAnalyser = useCallback(() => {
+  const stopAnalyserNodes = useCallback(() => {
     analyserCleanupRef.current?.();
     analyserCleanupRef.current = null;
     levelsRef.current = Array.from({ length: BAR_COUNT }, () => 0.2);
     setMicLive(false);
   }, []);
 
-  const startAnalyser = useCallback(async (precreated?: AudioContext) => {
-    stopAnalyser();
-    if (!navigator.mediaDevices?.getUserMedia) return;
+  const releaseStream = useCallback(() => {
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+    streamRef.current = null;
+  }, []);
 
+  const attachAnalyser = useCallback(async (stream: MediaStream, precreated?: AudioContext) => {
+    stopAnalyserNodes();
     const Ctx = getAudioContextConstructor();
     const audioCtx = precreated && precreated.state !== 'closed'
       ? precreated
       : (Ctx ? new Ctx() : null);
     if (!audioCtx) return;
 
-    const stream = await openClinicalMic();
     if (audioCtx.state === 'suspended') {
       await audioCtx.resume();
     }
@@ -94,14 +108,11 @@ export function useSpeechDictation(onFinal: (transcript: string) => void) {
     compressor.ratio.value = 12;
     compressor.attack.value = 0.003;
     compressor.release.value = 0.22;
-
     const gainNode = audioCtx.createGain();
     gainNode.gain.value = 2.4;
-
     const analyser = audioCtx.createAnalyser();
     analyser.fftSize = 512;
     analyser.smoothingTimeConstant = 0.42;
-
     source.connect(compressor);
     compressor.connect(gainNode);
     gainNode.connect(analyser);
@@ -119,18 +130,13 @@ export function useSpeechDictation(onFinal: (transcript: string) => void) {
         rms += centered * centered;
       }
       rms = Math.sqrt(rms / time.length);
-
       const current = gainNode.gain.value;
-      if (rms < 0.035) {
-        gainNode.gain.value = Math.min(MAX_GAIN, current * 1.035);
-      } else if (rms < TARGET_RMS) {
-        gainNode.gain.value = Math.min(MAX_GAIN, current * 1.012);
-      } else if (rms > 0.28) {
-        gainNode.gain.value = Math.max(MIN_GAIN, current * 0.96);
-      }
+      if (rms < 0.035) gainNode.gain.value = Math.min(MAX_GAIN, current * 1.035);
+      else if (rms < TARGET_RMS) gainNode.gain.value = Math.min(MAX_GAIN, current * 1.012);
+      else if (rms > 0.28) gainNode.gain.value = Math.max(MIN_GAIN, current * 0.96);
 
       const voiceEnd = Math.max(8, Math.floor(freq.length * 0.42));
-      const bars = Array.from({ length: BAR_COUNT }, (_, i) => {
+      levelsRef.current = Array.from({ length: BAR_COUNT }, (_, i) => {
         const idx = Math.min(voiceEnd - 1, Math.floor((i / BAR_COUNT) * voiceEnd));
         const neighbour = Math.min(voiceEnd - 1, idx + 1);
         const freqLevel = (freq[idx] + freq[neighbour]) / 510;
@@ -138,7 +144,6 @@ export function useSpeechDictation(onFinal: (transcript: string) => void) {
         const wave = Math.abs((sample - 128) / 128);
         return Math.max(0.08, Math.min(1, freqLevel * 0.85 + wave * 0.45 + rms * 0.9));
       });
-      levelsRef.current = bars;
       if (now - lastLive > 180) {
         lastLive = now;
         const speaking = rms > 0.028;
@@ -154,9 +159,44 @@ export function useSpeechDictation(onFinal: (transcript: string) => void) {
       compressor.disconnect();
       gainNode.disconnect();
       void audioCtx.close();
-      stream.getTracks().forEach((track) => track.stop());
     };
-  }, [stopAnalyser]);
+  }, [stopAnalyserNodes]);
+
+  const startRecorder = useCallback((stream: MediaStream) => {
+    chunksRef.current = [];
+    const mime = pickRecorderMime();
+    mimeRef.current = mime;
+    const recorder = new MediaRecorder(stream, { mimeType: mime, audioBitsPerSecond: 64_000 });
+    recorder.ondataavailable = (event) => {
+      if (event.data && event.data.size > 0) chunksRef.current.push(event.data);
+    };
+    recorder.start(1000);
+    recorderRef.current = recorder;
+  }, []);
+
+  const stopRecorder = useCallback((): Promise<File | null> => {
+    return new Promise((resolve) => {
+      const recorder = recorderRef.current;
+      const finish = () => {
+        recorderRef.current = null;
+        const parts = chunksRef.current;
+        chunksRef.current = [];
+        if (!parts.length) {
+          resolve(null);
+          return;
+        }
+        const blob = new Blob(parts, { type: mimeRef.current || 'audio/webm' });
+        const ext = mimeRef.current.includes('mp4') ? 'm4a' : 'webm';
+        resolve(new File([blob], `consulta-dictado.${ext}`, { type: blob.type }));
+      };
+      if (!recorder || recorder.state === 'inactive') {
+        finish();
+        return;
+      }
+      recorder.addEventListener('stop', finish, { once: true });
+      recorder.stop();
+    });
+  }, []);
 
   useEffect(() => {
     const win = window as unknown as {
@@ -164,7 +204,7 @@ export function useSpeechDictation(onFinal: (transcript: string) => void) {
       webkitSpeechRecognition?: new () => RecognitionInstance;
     };
     const Ctor = win.SpeechRecognition || win.webkitSpeechRecognition;
-    setSupported(Boolean(Ctor));
+    setSupported(Boolean(Ctor) || typeof MediaRecorder !== 'undefined');
     if (!Ctor) return;
 
     const recognition = new Ctor();
@@ -183,10 +223,7 @@ export function useSpeechDictation(onFinal: (transcript: string) => void) {
       if (finalChunk.trim()) onFinalRef.current(finalChunk.trim());
     };
     recognition.onerror = () => {
-      if (!wantListenRef.current) {
-        setListening(false);
-        stopAnalyser();
-      }
+      if (!wantListenRef.current) setListening(false);
     };
     recognition.onend = () => {
       setInterim('');
@@ -194,50 +231,58 @@ export function useSpeechDictation(onFinal: (transcript: string) => void) {
         try {
           recognition.start();
         } catch {
-          /* already started */
+          /* already started — MediaRecorder sigue activo */
         }
       } else {
         setListening(false);
-        stopAnalyser();
       }
     };
     recognitionRef.current = recognition;
     return () => {
       wantListenRef.current = false;
       recognition.abort();
-      stopAnalyser();
+      void stopRecorder();
+      stopAnalyserNodes();
+      releaseStream();
     };
-  }, [stopAnalyser]);
+  }, [releaseStream, stopAnalyserNodes, stopRecorder]);
 
   const start = useCallback(async () => {
     wantListenRef.current = true;
     setListening(true);
-
     const Ctx = getAudioContextConstructor();
     const audioCtx = Ctx ? new Ctx() : undefined;
-    if (audioCtx && audioCtx.state === 'suspended') {
-      void audioCtx.resume();
-    }
+    if (audioCtx && audioCtx.state === 'suspended') void audioCtx.resume();
 
+    const stream = await openClinicalMic();
+    streamRef.current = stream;
     try {
-      await startAnalyser(audioCtx);
+      await attachAnalyser(stream, audioCtx);
     } catch {
-      /* permission denied — CSS waves still run */
+      /* ondas CSS de respaldo */
+    }
+    try {
+      startRecorder(stream);
+    } catch {
+      /* MediaRecorder no disponible */
     }
     try {
       recognitionRef.current?.start();
     } catch {
-      /* already started or unsupported */
+      /* already started */
     }
-  }, [startAnalyser]);
+  }, [attachAnalyser, startRecorder]);
 
-  const stop = useCallback(() => {
+  const stop = useCallback(async () => {
     wantListenRef.current = false;
     recognitionRef.current?.stop();
     setListening(false);
     setInterim('');
-    stopAnalyser();
-  }, [stopAnalyser]);
+    const file = await stopRecorder();
+    stopAnalyserNodes();
+    releaseStream();
+    return file;
+  }, [releaseStream, stopAnalyserNodes, stopRecorder]);
 
   return { listening, interim, levelsRef, micLive, supported, start, stop };
 }

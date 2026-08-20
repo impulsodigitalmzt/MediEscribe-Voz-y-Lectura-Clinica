@@ -328,6 +328,9 @@ export interface NotaClinica {
   seguimiento: string;
   notas_evolucion: string;
   resumen: string;
+  subjetivo: string;
+  objetivo: string;
+  analisis: string;
   campos_inciertos: string[];
   secciones_faltantes: string[];
   sello_responsable: string;

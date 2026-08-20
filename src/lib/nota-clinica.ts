@@ -1,6 +1,7 @@
 import { clipTranscript } from "./audio";
-import { groqChatJson, normalizeLanguageCode } from "./groq";
-import { validarNotaNom004 } from "./guardia-legal";
+import { normalizeLanguageCode } from "./groq";
+import { logSinPhi } from "./phi";
+import { aplicarSoapANota, sintetizarSoapClinico } from "./soap-ia";
 import type {
   DatosMedico,
   DocumentacionConsulta,
@@ -46,50 +47,6 @@ const IDIOMA_NOMBRE: Record<string, string> = {
   sw: "Kiswahili",
 };
 
-const SYSTEM_PROMPT = `Eres el motor de documentación clínica de MediEscribe. NO transcribas: SINTETIZA y ORDENA la consulta en SOAP alineado a NOM-004-SSA3-2012.
-
-MISIÓN: del audio/texto extrae solo hechos clínicos, redáctalos en español médico profesional y rellénalos en JSON. Cada campo es un tipo de dato distinto.
-
-SALIDA: un solo JSON válido (sin markdown) con:
-- idioma_detectado (ISO 639-1)
-- nota_medica_espanol (objeto, SIEMPRE español clínico)
-- receta_paciente_nativo (objeto, idioma del paciente)
-
-nota_medica_espanol DEBE incluir:
-
-soap: {
-  subjetivo: síntesis S (motivo + HEA + interrogatorio pertinente, 3-8 frases),
-  objetivo: síntesis O (vitales + exploración + estudios mencionados),
-  analisis: síntesis A (impresión diagnóstica, razonamiento breve, diferenciales si aplica),
-  plan: síntesis P (tratamiento, estudios, medidas, seguimiento)
-}
-
-Campos NOM-004 (obligatorios, distintos entre sí):
-- motivo_consulta: 1-2 frases. NUNCA el relato completo.
-- padecimiento_actual: HEA (inicio, cronología, síntomas, factores, evolución).
-- interrogatorio: dirigido / revisión por sistemas. Si no hubo: indícalo.
-- exploracion_fisica: hallazgos. Si no se exploró: "No se documentó exploración física en la transcripción."
-- signos_vitales: objeto con strings (vacío si no se dijeron): ta_sistolica, ta_diastolica, temperatura, fc, fr, spo2, peso, talla, imc, glucosa. Extrae números si el médico los dictó (p. ej. "tensión 120/80", "sat 98"). Calcula imc si hay peso (kg) y talla (cm).
-- diagnostico: impresión diagnóstica. No copies el dictado.
-- diagnostico_cie10: código CIE-10 más probable del diagnóstico verbalizado (p. ej. "M54.5"). Inferible; no inventes un cuadro clínico distinto.
-- diagnostico_presuntivo, diagnosticos_diferenciales, pronostico
-- plan / plan_tratamiento: terapéutica, no farmacológico y control.
-- tratamiento: array {medicamento, dosis, via, periodicidad} SOLO fármacos indicados ahora. Estructura estricta.
-- solicitudes_estudio: array de strings (labs, imagen). También resume en "estudios".
-- medicamentos: texto de fármacos actuales o indicados.
-- resumen: 2-4 oraciones (motivo, dx+CIE-10, plan). NUNCA transcripción cruda.
-- alergias, antecedentes_personales, seguimiento si se mencionaron.
-
-PROHIBIDO:
-- Copiar la transcripción en cualquier campo.
-- Pegar el mismo párrafo en dos campos.
-- Inventar síntomas, signos, dosis o estudios no dichos.
-- Devolver texto plano.
-
-EJEMPLO CORRECTO: motivo "Dolor lumbar crónico"; padecimiento "3 meses, 6/10, empeora al estar de pie"; diagnostico "Lumbalgia (CIE-10: M54.5)"; diagnostico_cie10 "M54.5"; tratamiento [{medicamento:"Naproxeno",dosis:"500 mg",via:"oral",periodicidad:"cada 12 horas"}].
-
-receta_paciente_nativo: indicaciones claras para el paciente, no copies la nota.`;
-
 const CAMPOS_NARRATIVOS = [
   "motivo_consulta",
   "padecimiento_actual",
@@ -102,6 +59,9 @@ const CAMPOS_NARRATIVOS = [
   "medicamentos",
   "notas_evolucion",
   "resumen",
+  "subjetivo",
+  "objetivo",
+  "analisis",
 ] as const;
 
 const TEXT_KEYS = [
@@ -330,6 +290,9 @@ export function notaDesdeExpediente(
     seguimiento: "",
     notas_evolucion: "",
     resumen: "",
+    subjetivo: "",
+    objetivo: "",
+    analisis: "",
     campos_inciertos: [],
     secciones_faltantes: [],
     sello_responsable: selloResponsableLegal(
@@ -346,59 +309,43 @@ export async function redactarNotaClinica(
   especialidad = "medicina_general",
   pacienteConocido?: string,
   datos: DatosMedico = {},
-  contextoExpediente = "",
+  _contextoExpediente = "",
   idiomaWhisper = ""
 ): Promise<DocumentacionConsulta> {
-  const clipped = clipTranscript(transcripcion, 3500);
+  const clipped = clipTranscript(transcripcion);
   const conocido =
     pacienteConocido && pacienteConocido !== "Paciente sin identificar" ? pacienteConocido : "";
   const idiomaHint = normalizeLanguageCode(idiomaWhisper) || detectarIdiomaTexto(clipped);
-  const nombreNativo = nombreIdioma(idiomaHint || "es");
-
-  const raw = await groqChatJson(env, [
-    { role: "system", content: SYSTEM_PROMPT },
+  const soap = await sintetizarSoapClinico(env, clipped);
+  const base = normalizeNota(
     {
-      role: "user",
-      content: `Sintetiza esta consulta en SOAP + NOM-004-SSA3. No transcribas: ordena motivo, HEA, exploración, signos vitales estructurados, diagnóstico con CIE-10, receta estructurada y plan.
-
-Especialidad: ${especialidad}
-Idioma de la receta (receta_paciente_nativo e idioma_detectado): ${idiomaHint || "desconocido — detéctalo"} (${nombreNativo})
-${conocido ? `Nombre del expediente (nombre_paciente): ${conocido}` : "Extrae identificación solo si se dijo."}
-${datos.sexo ? `Sexo conocido: ${datos.sexo}` : ""}
-${datos.domicilio ? `Domicilio conocido: ${datos.domicilio}` : ""}
-${datos.medicoNombre ? `Médico tratante: ${datos.medicoNombre}` : ""}
-${datos.medicoCedula ? `Cédula profesional: ${datos.medicoCedula}` : ""}
-${contextoExpediente ? `\n${contextoExpediente}\n` : ""}
-
-No copies el dictado completo en las casillas. Un campo = un tipo de dato clínico.
-
-TRANSCRIPCIÓN:
-${clipped}`,
+      subjetivo: soap.subjetivo,
+      objetivo: soap.objetivo,
+      analisis: soap.analisis,
+      padecimiento_actual: soap.subjetivo,
+      exploracion_fisica: soap.objetivo,
+      diagnostico: soap.analisis,
+      plan_tratamiento: soap.plan_tratamiento,
+      diagnostico_cie10: soap.diagnostico_cie10,
+      pronostico: soap.pronostico,
+      tratamiento: soap.medicamentos,
     },
-  ]);
-  const parsed = parseDocumentacionDual(raw, clipped, conocido, datos, idiomaHint);
-  parsed.nota = sanitizarNotaContraTranscripcion(parsed.nota, clipped);
-  parsed.nota = await completarNotaNom004(env, parsed.nota, clipped, contextoExpediente);
-  parsed.nota = sanitizarNotaContraTranscripcion(parsed.nota, clipped);
-  console.log(
-    JSON.stringify({
-      event: "nota_clinica_ok",
-      transcriptChars: clipped.length,
-      motivoChars: parsed.nota.motivo_consulta.length,
-      padecimientoChars: parsed.nota.padecimiento_actual.length,
-      diagnosticoChars: parsed.nota.diagnostico.length,
-      exploracionChars: parsed.nota.exploracion_fisica.length,
-      planChars: parsed.nota.plan.length,
-      medicamentosChars: parsed.nota.medicamentos.length,
-      pronosticoChars: parsed.nota.pronostico.length,
-      motivoEqualsTranscript: parsed.nota.motivo_consulta.trim() === clipped.trim(),
-      padecimientoEqualsTranscript: parsed.nota.padecimiento_actual.trim() === clipped.trim(),
-      tieneCie10: Boolean(parsed.nota.diagnostico_cie10),
-      vitalesLlenos: Object.values(parsed.nota.signos_vitales).filter(Boolean).length,
-      recetas: parsed.nota.tratamiento.length,
-    })
+    clipped,
+    conocido,
+    datos
   );
-  return parsed;
+  const nota = sanitizarNotaContraTranscripcion(aplicarSoapANota(base, soap), clipped);
+  const receta = recetaDesdeNota(nota, idiomaHint || "es");
+  receta.idioma = receta.idioma || idiomaHint || "es";
+  receta.idioma_nombre = receta.idioma_nombre || nombreIdioma(receta.idioma);
+  logSinPhi("nota_clinica_ok", {
+    especialidad,
+    transcriptChars: clipped.length,
+    soapKeys: ["subjetivo", "objetivo", "analisis", "plan_tratamiento", "medicamentos", "diagnostico_cie10", "pronostico"],
+    tieneCie10: Boolean(nota.diagnostico_cie10),
+    recetas: nota.tratamiento.length,
+  });
+  return { nota, receta, idioma_detectado: idiomaHint || "es" };
 }
 
 export function normalizeNota(
@@ -463,6 +410,9 @@ export function normalizeNota(
     seguimiento: text("seguimiento"),
     notas_evolucion: text("notas_evolucion", "evolucion"),
     resumen: text("resumen"),
+    subjetivo: text("subjetivo"),
+    objetivo: text("objetivo"),
+    analisis: text("analisis", "análisis"),
     campos_inciertos: list("campos_inciertos"),
     secciones_faltantes: list("secciones_faltantes"),
     sello_responsable: "",
@@ -754,64 +704,6 @@ export function nombreDesdeNota(nota: NotaClinica, fallback: string): string {
   if (nota.nombre_paciente && nota.nombre_paciente !== NO_MENCIONADO) return nota.nombre_paciente;
   if (fallback && fallback !== "Paciente sin identificar") return fallback;
   return fallback || "Paciente sin identificar";
-}
-
-async function completarNotaNom004(
-  env: Env,
-  nota: NotaClinica,
-  transcripcion: string,
-  contextoExpediente: string
-): Promise<NotaClinica> {
-  const dictamen = validarNotaNom004(nota);
-  if (dictamen.cumple) return nota;
-
-  try {
-    const raw = await groqChatJson(env, [
-      { role: "system", content: SYSTEM_PROMPT },
-      {
-        role: "user",
-        content: `Completa SOLO los faltantes NOM-004. Sintetiza SOAP; extrae signos_vitales, diagnostico_cie10 y tratamiento estructurado si constan en el dictado.
-Si un dato no está en la transcripción, descríbelo como no documentado. PROHIBIDO pegar el dictado completo.
-Faltantes: ${dictamen.guia.join("; ")}
-${contextoExpediente ? `\n${contextoExpediente}\n` : ""}
-
-NOTA PRELIMINAR (conserva lo que ya está bien):
-${JSON.stringify(nota)}
-
-TRANSCRIPCIÓN (solo para extraer frases puntuales):
-${transcripcion}
-
-Devuelve JSON con nota_medica_espanol. Español clínico. Cada campo distinto.`,
-      },
-    ]);
-    const notaRaw = objetoNotaDesdeRespuesta(raw);
-    const reparada = normalizeNota(notaRaw, transcripcion, nota.nombre_paciente);
-    reparada.medico_nombre = nota.medico_nombre;
-    reparada.medico_cedula = nota.medico_cedula;
-    reparada.medico_especialidad = nota.medico_especialidad;
-    reparada.fecha = nota.fecha;
-    reparada.hora = nota.hora;
-    reparada.signos_vitales = fusionarSignos(nota.signos_vitales, reparada.signos_vitales);
-    if (!reparada.tratamiento.length) reparada.tratamiento = nota.tratamiento;
-    if (!reparada.diagnostico_cie10) reparada.diagnostico_cie10 = nota.diagnostico_cie10;
-    if (!reparada.solicitudes_estudio.length) reparada.solicitudes_estudio = nota.solicitudes_estudio;
-    return sanitizarNotaContraTranscripcion(
-      aplicarSelloLegal(reparada, {
-        medicoNombre: nota.medico_nombre,
-        medicoCedula: nota.medico_cedula,
-        medicoEspecialidad: nota.medico_especialidad,
-      }),
-      transcripcion
-    );
-  } catch (error) {
-    console.error(
-      JSON.stringify({
-        event: "nota_nom004_repair_failed",
-        message: error instanceof Error ? error.message : "unknown",
-      })
-    );
-    return nota;
-  }
 }
 
 function buildResumen(nota: NotaClinica): string {

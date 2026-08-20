@@ -105,6 +105,7 @@ CREATE TABLE IF NOT EXISTS consultas (
   medico_nombre         TEXT,
   medico_cedula         TEXT,
   medico_id             UUID,
+  user_id               UUID,
   consentimiento_informado_aceptado BOOLEAN NOT NULL DEFAULT false,
   consentimiento_informado_en TIMESTAMPTZ,
   consentimiento_informado_titular TEXT NOT NULL DEFAULT '',
@@ -386,7 +387,32 @@ CREATE INDEX IF NOT EXISTS ix_consultas_estado_fecha
   ON consultas (estado, fecha_hora DESC);
 
 -- -----------------------------------------------------------------------------
--- Tabla oficial de episodios: consultas (NO usar consultas_medicas).
--- El legado consultas_medicas se absorbe con:
---   db/migrations/2026-08-19-unificar-consultas.sql
+-- Episodios clínicos: tabla física `consultas`.
+-- `consultas_medicas` es la vista canónica (SELECT * FROM consultas).
+-- user_id (= medico_id) controla acceso LFPDPPP; created_at es inalterable.
+-- El legado serial se absorbe con db/migrations/2026-08-19-unificar-consultas.sql
 -- -----------------------------------------------------------------------------
+ALTER TABLE consultas ADD COLUMN IF NOT EXISTS user_id UUID;
+CREATE INDEX IF NOT EXISTS ix_consultas_user ON consultas (user_id);
+
+CREATE OR REPLACE FUNCTION consultas_proteger_auditoria()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  NEW.user_id := COALESCE(NEW.user_id, NEW.medico_id);
+  NEW.medico_id := COALESCE(NEW.medico_id, NEW.user_id);
+  IF TG_OP = 'UPDATE' THEN
+    NEW.created_at := OLD.created_at;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_consultas_proteger_auditoria ON consultas;
+CREATE TRIGGER trg_consultas_proteger_auditoria
+  BEFORE INSERT OR UPDATE ON consultas
+  FOR EACH ROW
+  EXECUTE PROCEDURE consultas_proteger_auditoria();
+
+CREATE OR REPLACE VIEW consultas_medicas AS SELECT * FROM consultas;

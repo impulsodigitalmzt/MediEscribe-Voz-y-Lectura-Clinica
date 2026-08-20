@@ -11,7 +11,6 @@ import {
   actualizarConsulta,
   exigirConsultaAcceso,
   finalizarConsulta,
-  getConsultaById,
   listConsultas,
   procesarConsultaDesdeAudio,
   procesarConsultaDesdeTexto,
@@ -54,7 +53,7 @@ consultaRoutes.post("/", async (c) => {
       c.executionCtx
     );
 
-    return c.json(respuestaConsulta(result), 201);
+    return c.json(await respuestaConsulta(c.env.SECRET_KEY, result), 201);
   } catch (error) {
     return consultaError(c, error, "consulta_audio_failed");
   }
@@ -149,7 +148,7 @@ consultaRoutes.post("/texto", async (c) => {
       c.executionCtx
     );
 
-    return c.json(respuestaConsulta(result), 201);
+    return c.json(await respuestaConsulta(c.env.SECRET_KEY, result), 201);
   } catch (error) {
     return consultaError(c, error, "consulta_texto_failed");
   }
@@ -389,24 +388,26 @@ consultaRoutes.get("/:id", async (c) => {
   }
 });
 
-function respuestaConsulta(result: {
-  row: Parameters<typeof publicConsulta>[0];
-  transcripcion: string;
-  nota: NotaClinica;
-  receta: RecetaPaciente;
-  paciente: Parameters<typeof publicConsulta>[1];
-  guardia_legal: Awaited<ReturnType<typeof publicConsulta>> extends { guardia_legal?: infer T } ? T : never;
-}) {
+async function respuestaConsulta(
+  phiSecret: string,
+  result: {
+    row: Parameters<typeof publicConsulta>[0];
+    transcripcion: string;
+    nota: NotaClinica;
+    receta: RecetaPaciente;
+    paciente: Parameters<typeof publicConsulta>[1];
+    guardia_legal: Awaited<ReturnType<typeof publicConsulta>>["guardia_legal"];
+  }
+) {
   return {
     ok: true,
-    consulta: undefined as unknown,
+    consulta: await publicConsulta(result.row, result.paciente, phiSecret),
     transcripcion: result.transcripcion,
     nota: result.nota,
     receta: result.receta,
     paciente: result.paciente,
     idioma_detectado: result.receta.idioma,
     guardia_legal: result.guardia_legal,
-    _row: result.row,
   };
 }
 

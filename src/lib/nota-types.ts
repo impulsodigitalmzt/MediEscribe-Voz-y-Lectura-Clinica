@@ -5,6 +5,34 @@ export type IndicacionTerapeutica = {
   periodicidad: string;
 };
 
+export type SignosVitales = {
+  ta_sistolica: string;
+  ta_diastolica: string;
+  temperatura: string;
+  fc: string;
+  fr: string;
+  spo2: string;
+  peso: string;
+  talla: string;
+  imc: string;
+  glucosa: string;
+};
+
+export function vacioSignosVitales(): SignosVitales {
+  return {
+    ta_sistolica: "",
+    ta_diastolica: "",
+    temperatura: "",
+    fc: "",
+    fr: "",
+    spo2: "",
+    peso: "",
+    talla: "",
+    imc: "",
+    glucosa: "",
+  };
+}
+
 export type NotaClinica = {
   nombre_paciente: string;
   edad: string;
@@ -26,10 +54,13 @@ export type NotaClinica = {
   antecedentes_familiares: string;
   antecedentes_sociales: string;
   exploracion_fisica: string;
+  signos_vitales: SignosVitales;
   estudios: string;
+  solicitudes_estudio: string[];
   diagnostico_presuntivo: string;
   diagnosticos_diferenciales: string;
   diagnostico: string;
+  diagnostico_cie10: string;
   pronostico: string;
   plan: string;
   tratamiento: IndicacionTerapeutica[];

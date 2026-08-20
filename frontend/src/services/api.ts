@@ -371,6 +371,38 @@ class ApiService {
     };
   }
 
+  async registrarConsentimientoConsulta(id: string, titularNombre: string): Promise<{
+    consentimiento_informado_aceptado: boolean;
+    consentimiento_informado_en: string | null;
+    consentimiento_informado_titular: string;
+    consentimiento_ia_aceptado: boolean;
+    consentimiento_version: string;
+  }> {
+    const token = this.getAccessToken();
+    const response = await fetch(`${API_BASE}/api/consultas-medicas/${id}/consentimiento`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({
+        titular_nombre: titularNombre,
+        consentimiento_informado: true,
+        consentimiento_ia: true,
+      }),
+    });
+    const data = await readApiJson<{
+      consentimiento: {
+        consentimiento_informado_aceptado: boolean;
+        consentimiento_informado_en: string | null;
+        consentimiento_informado_titular: string;
+        consentimiento_ia_aceptado: boolean;
+        consentimiento_version: string;
+      };
+    }>(response, 'No se pudo registrar el consentimiento.');
+    return data.consentimiento;
+  }
+
   async guardarConsultaNota(id: string, nota: NotaClinica, receta?: RecetaPaciente): Promise<{
     consulta: ConsultaMedica;
     nota: NotaClinica | null;

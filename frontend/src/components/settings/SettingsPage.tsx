@@ -199,8 +199,21 @@ export default function SettingsPage() {
             <div className="flex gap-3"><span className="font-bold text-teal-700 flex-shrink-0">1.</span><span><strong>Buscar paciente</strong> — En el panel, identifique por nombre, CURP o número de expediente.</span></div>
             <div className="flex gap-3"><span className="font-bold text-teal-700 flex-shrink-0">2.</span><span><strong>Alta si no existe</strong> — Cree el expediente con datos personales y el consentimiento de privacidad obligatorio.</span></div>
             <div className="flex gap-3"><span className="font-bold text-teal-700 flex-shrink-0">3.</span><span><strong>Resumen</strong> — Revise demografía e historial (solo lectura) y pulse «Iniciar Nueva Consulta».</span></div>
-            <div className="flex gap-3"><span className="font-bold text-teal-700 flex-shrink-0">4.</span><span><strong>Nota clínica</strong> — Dicte o escriba; su nombre, cédula y especialidad quedan fijos desde la sesión.</span></div>
-            <div className="flex gap-3"><span className="font-bold text-teal-700 flex-shrink-0">5.</span><span><strong>Cerrar y bloquear</strong> — La consulta pasa a locked y no admite más cambios (NOM-004 5.11).</span></div>
+            <div className="flex gap-3"><span className="font-bold text-teal-700 flex-shrink-0">4.</span><span><strong>Consentimiento de la consulta</strong> — Antes de dictar o guardar, registre el consentimiento informado y el uso de IA (LFPDPPP).</span></div>
+            <div className="flex gap-3"><span className="font-bold text-teal-700 flex-shrink-0">5.</span><span><strong>Nota clínica</strong> — Dicte o escriba; su nombre, cédula y especialidad quedan fijos desde la sesión.</span></div>
+            <div className="flex gap-3"><span className="font-bold text-teal-700 flex-shrink-0">6.</span><span><strong>Cerrar y bloquear</strong> — La consulta pasa a locked y no admite más cambios (NOM-004 5.11).</span></div>
+          </div>
+        </section>
+
+        {/* Disclaimer */}
+        <section className="card p-6">
+          <div className="flex items-center gap-2 mb-5">
+            <Shield className="w-5 h-5 text-amber-600" />
+            <h2 className="text-lg font-semibold text-slate-800">LFPDPPP y datos sensibles</h2>
+          </div>
+          <div className="space-y-3 text-sm text-slate-600 leading-relaxed">
+            <p>Los datos de salud se tratan como datos sensibles. Cada médico autenticado solo accede a sus expedientes. Las transcripciones se cifran en reposo (AES-GCM). Las llamadas a Groq se envían con <code>store: false</code> para que no se usen en entrenamiento de modelos públicos.</p>
+            <p>En la consola de Groq, active Zero Data Retention (Data Controls) para el máximo de no retención. El consentimiento informado de cada consulta es obligatorio antes de guardar o generar nota con IA.</p>
           </div>
         </section>
 

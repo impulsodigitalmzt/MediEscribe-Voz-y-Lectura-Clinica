@@ -14,8 +14,11 @@ const EMPTY_NOTA: NotaClinica = {
   motivo_consulta: '', padecimiento_actual: '', interrogatorio: '',
   antecedentes_personales: '', antecedentes_quirurgicos: '', medicamentos: '',
   alergias: '', antecedentes_familiares: '', antecedentes_sociales: '',
-  exploracion_fisica: '', estudios: '', diagnostico_presuntivo: '',
-  diagnosticos_diferenciales: '', diagnostico: '', pronostico: '', plan: '',
+  exploracion_fisica: '', signos_vitales: {
+    ta_sistolica: '', ta_diastolica: '', temperatura: '', fc: '', fr: '',
+    spo2: '', peso: '', talla: '', imc: '', glucosa: '',
+  }, estudios: '', solicitudes_estudio: [], diagnostico_presuntivo: '',
+  diagnosticos_diferenciales: '', diagnostico: '', diagnostico_cie10: '', pronostico: '', plan: '',
   tratamiento: [], seguimiento: '', notas_evolucion: '', resumen: '',
   campos_inciertos: [], secciones_faltantes: [], sello_responsable: '',
 };

@@ -57,7 +57,8 @@ export function useSpeechDictation(onFinal: (transcript: string) => void) {
   const [listening, setListening] = useState(false);
   const [interim, setInterim] = useState('');
   const [supported, setSupported] = useState(true);
-  const [levels, setLevels] = useState<number[]>(() => Array.from({ length: BAR_COUNT }, () => 0.2));
+  const levelsRef = useRef<number[]>(Array.from({ length: BAR_COUNT }, () => 0.2));
+  const [micLive, setMicLive] = useState(false);
   const recognitionRef = useRef<RecognitionInstance | null>(null);
   const wantListenRef = useRef(false);
   const onFinalRef = useRef(onFinal);
@@ -67,7 +68,8 @@ export function useSpeechDictation(onFinal: (transcript: string) => void) {
   const stopAnalyser = useCallback(() => {
     analyserCleanupRef.current?.();
     analyserCleanupRef.current = null;
-    setLevels(Array.from({ length: BAR_COUNT }, () => 0.2));
+    levelsRef.current = Array.from({ length: BAR_COUNT }, () => 0.2);
+    setMicLive(false);
   }, []);
 
   const startAnalyser = useCallback(async (precreated?: AudioContext) => {
@@ -107,7 +109,8 @@ export function useSpeechDictation(onFinal: (transcript: string) => void) {
     const freq = new Uint8Array(analyser.frequencyBinCount);
     const time = new Uint8Array(analyser.fftSize);
     let raf = 0;
-    const tick = () => {
+    let lastLive = 0;
+    const tick = (now: number) => {
       analyser.getByteFrequencyData(freq);
       analyser.getByteTimeDomainData(time);
       let rms = 0;
@@ -135,10 +138,15 @@ export function useSpeechDictation(onFinal: (transcript: string) => void) {
         const wave = Math.abs((sample - 128) / 128);
         return Math.max(0.08, Math.min(1, freqLevel * 0.85 + wave * 0.45 + rms * 0.9));
       });
-      setLevels(bars);
+      levelsRef.current = bars;
+      if (now - lastLive > 180) {
+        lastLive = now;
+        const speaking = rms > 0.028;
+        setMicLive((prev) => (prev === speaking ? prev : speaking));
+      }
       raf = requestAnimationFrame(tick);
     };
-    tick();
+    raf = requestAnimationFrame(tick);
 
     analyserCleanupRef.current = () => {
       cancelAnimationFrame(raf);
@@ -231,5 +239,5 @@ export function useSpeechDictation(onFinal: (transcript: string) => void) {
     stopAnalyser();
   }, [stopAnalyser]);
 
-  return { listening, interim, levels, supported, start, stop };
+  return { listening, interim, levelsRef, micLive, supported, start, stop };
 }

@@ -26,7 +26,7 @@ function accionDesdeRequest(method: string, path: string): AuditAccion {
   const lower = path.toLowerCase();
   if (lower.includes("/aclaraciones") && lower.includes("/cerrar")) return "cierre_aclaracion";
   if (lower.includes("/aclaraciones") && method !== "GET") return "nota_aclaracion";
-  if (lower.includes("/finalizar")) return "cierre_consulta";
+  if (lower.includes("/consentimiento") && method !== "GET") return "guardado_consulta";
   if (lower.includes("/abrir")) return "apertura_borrador";
   if (lower.includes("/buscar")) return "busqueda";
   if (method === "POST" && /\/api\/pacientes\/?$/.test(lower)) return "creacion_paciente";

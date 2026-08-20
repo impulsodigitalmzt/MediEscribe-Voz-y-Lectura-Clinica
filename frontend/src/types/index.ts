@@ -266,6 +266,34 @@ export const NOTE_SECTION_LABELS: Record<NoteSectionKey, string> = {
 
 // --- Consulta médica (Neon) ---
 
+export interface SignosVitales {
+  ta_sistolica: string;
+  ta_diastolica: string;
+  temperatura: string;
+  fc: string;
+  fr: string;
+  spo2: string;
+  peso: string;
+  talla: string;
+  imc: string;
+  glucosa: string;
+}
+
+export function vacioSignosVitales(): SignosVitales {
+  return {
+    ta_sistolica: '',
+    ta_diastolica: '',
+    temperatura: '',
+    fc: '',
+    fr: '',
+    spo2: '',
+    peso: '',
+    talla: '',
+    imc: '',
+    glucosa: '',
+  };
+}
+
 export interface NotaClinica {
   nombre_paciente: string;
   edad: string;
@@ -287,10 +315,13 @@ export interface NotaClinica {
   antecedentes_familiares: string;
   antecedentes_sociales: string;
   exploracion_fisica: string;
+  signos_vitales: SignosVitales;
   estudios: string;
+  solicitudes_estudio: string[];
   diagnostico_presuntivo: string;
   diagnosticos_diferenciales: string;
   diagnostico: string;
+  diagnostico_cie10: string;
   pronostico: string;
   plan: string;
   tratamiento: Array<{ medicamento: string; dosis: string; via: string; periodicidad: string }>;
@@ -399,6 +430,12 @@ export interface ConsultaMedica {
   estado: string | null;
   medico_nombre?: string | null;
   medico_cedula?: string | null;
+  medico_id?: string | null;
+  consentimiento_informado_aceptado?: boolean;
+  consentimiento_informado_en?: string | null;
+  consentimiento_informado_titular?: string;
+  consentimiento_ia_aceptado?: boolean;
+  consentimiento_version?: string;
   finalizada_en?: string | null;
   guardia_legal?: DictamenNom004;
   historial?: ConsultaHistorialItem[];

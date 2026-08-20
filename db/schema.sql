@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS pacientes (
 
 ALTER TABLE pacientes ADD COLUMN IF NOT EXISTS consentimiento_privacidad_aceptado BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE pacientes ADD COLUMN IF NOT EXISTS consentimiento_privacidad_en TIMESTAMPTZ;
+ALTER TABLE pacientes ADD COLUMN IF NOT EXISTS medico_id UUID;
 
 CREATE UNIQUE INDEX IF NOT EXISTS ux_pacientes_numero_expediente
   ON pacientes (numero_expediente);
@@ -103,6 +104,12 @@ CREATE TABLE IF NOT EXISTS consultas (
   estado                TEXT NOT NULL DEFAULT 'borrador',
   medico_nombre         TEXT,
   medico_cedula         TEXT,
+  medico_id             UUID,
+  consentimiento_informado_aceptado BOOLEAN NOT NULL DEFAULT false,
+  consentimiento_informado_en TIMESTAMPTZ,
+  consentimiento_informado_titular TEXT NOT NULL DEFAULT '',
+  consentimiento_ia_aceptado BOOLEAN NOT NULL DEFAULT false,
+  consentimiento_version TEXT NOT NULL DEFAULT '',
   finalizada_en         TIMESTAMPTZ,
   created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),

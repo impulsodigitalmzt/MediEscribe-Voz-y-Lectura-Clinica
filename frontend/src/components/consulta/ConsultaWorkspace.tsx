@@ -9,20 +9,11 @@ import type { ConsultaMedica, DictamenNom004, NotaAclaracion, NotaClinica, Recet
 import PhysicianIdentityBar from './PhysicianIdentityBar';
 import VoiceDictationPanel from './VoiceDictationPanel';
 import NoteEditor from './NoteEditor';
+import ConsentimientoInformado from './ConsentimientoInformado';
 import { stampMexicoNow } from '../../utils';
-import { mapearNotaDesdeIA } from '../../lib/mapearNotaClinica';
+import { mapearNotaDesdeIA, notaClinicaVacia } from '../../lib/mapearNotaClinica';
 
-const EMPTY_NOTA: NotaClinica = {
-  nombre_paciente: '', edad: '', sexo: '', domicilio: '', ocupacion: '',
-  fecha: '', hora: '', medico_nombre: '', medico_cedula: '', medico_especialidad: '',
-  motivo_consulta: '', padecimiento_actual: '', interrogatorio: '',
-  antecedentes_personales: '', antecedentes_quirurgicos: '', medicamentos: '',
-  alergias: '', antecedentes_familiares: '', antecedentes_sociales: '',
-  exploracion_fisica: '', estudios: '', diagnostico_presuntivo: '',
-  diagnosticos_diferenciales: '', diagnostico: '', pronostico: '', plan: '',
-  tratamiento: [], seguimiento: '', notas_evolucion: '', resumen: '',
-  campos_inciertos: [], secciones_faltantes: [], sello_responsable: '',
-};
+const EMPTY_NOTA: NotaClinica = notaClinicaVacia();
 
 const EMPTY_RECETA: RecetaPaciente = {
   idioma: '', idioma_nombre: '', titulo: '', resumen: '', indicaciones: '',
@@ -99,6 +90,9 @@ export default function ConsultaWorkspace() {
 
   const locked = consultaCerrada(consulta?.estado);
   const pacienteId = consulta?.paciente_id || consulta?.paciente?.id || '';
+  const consentimientoListo = Boolean(
+    consulta?.consentimiento_informado_aceptado && consulta?.consentimiento_ia_aceptado
+  );
 
   useEffect(() => {
     if (!user || locked) return;
@@ -160,6 +154,10 @@ export default function ConsultaWorkspace() {
       setError('La consulta está bloqueada. Use una nota de aclaración.');
       return;
     }
+    if (!consentimientoListo) {
+      setError('Registre el consentimiento informado del paciente antes de generar la nota.');
+      return;
+    }
     if (!id) {
       setError('No hay una consulta abierta.');
       return;
@@ -195,7 +193,7 @@ export default function ConsultaWorkspace() {
       if (result.receta) setReceta({ ...EMPTY_RECETA, ...result.receta, medicamentos: result.receta.medicamentos ?? [] });
       setDictado(result.transcripcion || texto);
       setGuardia(result.guardia_legal);
-      setSavedMsg('Nota estructurada por IA (SOAP / NOM-004). Revise cada campo y guarde.');
+      setSavedMsg('Nota SOAP sintetizada (NOM-004). Revise S-O-A-P y guarde. El dictado crudo queda oculto.');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'No se pudo generar la nota.');
     } finally {
@@ -206,6 +204,10 @@ export default function ConsultaWorkspace() {
   const handleGenerarDesdeAudio = async () => {
     if (locked) {
       setError('La consulta está bloqueada.');
+      return;
+    }
+    if (!consentimientoListo) {
+      setError('Registre el consentimiento informado del paciente antes de generar la nota.');
       return;
     }
     if (!id) {
@@ -242,7 +244,7 @@ export default function ConsultaWorkspace() {
       if (result.receta) setReceta({ ...EMPTY_RECETA, ...result.receta, medicamentos: result.receta.medicamentos ?? [] });
       if (result.transcripcion) setDictado(result.transcripcion);
       setGuardia(result.guardia_legal);
-      setSavedMsg('Audio transcrito y nota estructurada por IA. Revise los campos NOM-004 y guarde.');
+      setSavedMsg('Audio transcrito y sintetizado en SOAP. Revise vitales, CIE-10 y receta, luego guarde.');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'No se pudo procesar el audio.');
     } finally {
@@ -252,6 +254,10 @@ export default function ConsultaWorkspace() {
 
   const handleSave = async () => {
     if (!id || locked) return;
+    if (!consentimientoListo) {
+      setError('Registre el consentimiento informado del paciente antes de guardar.');
+      return;
+    }
     setSaving(true);
     setError('');
     try {
@@ -272,6 +278,10 @@ export default function ConsultaWorkspace() {
 
   const handleFinalizar = async () => {
     if (!id || locked) return;
+    if (!consentimientoListo) {
+      setError('Registre el consentimiento informado del paciente antes de cerrar la consulta.');
+      return;
+    }
     setFinalizing(true);
     setError('');
     try {
@@ -351,7 +361,7 @@ export default function ConsultaWorkspace() {
             <ArrowLeft className="w-5 h-5" />
           </button>
           <div className="flex-1 min-w-0">
-            <h1 className="text-base font-semibold text-slate-900">Consulta médica</h1>
+            <h1 className="text-base font-semibold text-slate-900">Consulta · resumen SOAP</h1>
             <p className="text-xs text-slate-500 truncate">
               {consulta?.paciente?.nombre_completo || consulta?.paciente_nombre}
               {consulta?.paciente?.numero_expediente ? ` · Exp. ${consulta.paciente.numero_expediente}` : ''}
@@ -400,7 +410,20 @@ export default function ConsultaWorkspace() {
 
           <PhysicianIdentityBar user={user} fecha={nota.fecha} hora={nota.hora} />
 
-          {!locked && (
+          {!locked && id && (
+            <ConsentimientoInformado
+              titularSugerido={consulta?.consentimiento_informado_titular || nota.nombre_paciente || consulta?.paciente_nombre || ''}
+              accepted={consentimientoListo}
+              acceptedAt={consulta?.consentimiento_informado_en}
+              saving={saving || generating}
+              onSubmit={async ({ titularNombre }) => {
+                const registered = await api.registrarConsentimientoConsulta(id, titularNombre);
+                setConsulta((prev) => prev ? { ...prev, ...registered } : prev);
+              }}
+            />
+          )}
+
+          {!locked && consentimientoListo && (
             <VoiceDictationPanel
               dictado={dictado}
               onDictado={setDictado}
@@ -421,6 +444,8 @@ export default function ConsultaWorkspace() {
             receta={receta}
             locked={locked}
             sello={selloActual}
+            historial={consulta?.historial ?? []}
+            consultaId={consulta?.id}
             onNota={(next) => { setNota(next); setSavedMsg(''); }}
             onReceta={(next) => { setReceta(next); setSavedMsg(''); }}
             onCopied={() => setSavedMsg('Receta copiada.')}

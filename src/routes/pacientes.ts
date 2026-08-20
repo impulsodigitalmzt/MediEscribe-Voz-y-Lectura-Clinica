@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import type { Context } from "hono";
 import { auditExpedienteMiddleware } from "../lib/audit";
-import { requireAuth, type AuthContext } from "../lib/auth";
+import { requireAuth, sesionDesdeAuth, type AuthContext } from "../lib/auth";
 import { isAppError } from "../lib/errors";
 import { jsonError } from "../lib/http";
 import {
@@ -29,7 +29,7 @@ pacienteRoutes.get("/buscar", async (c) => {
         apellido_materno: c.req.query("apellido_materno") ?? "",
         fecha_nacimiento: c.req.query("fecha_nacimiento") ?? "",
         curp: c.req.query("curp") ?? "",
-      })
+      }, sesionDesdeAuth(c))
     );
     return c.json({ ok: true, ...result });
   } catch (error) {
@@ -40,7 +40,9 @@ pacienteRoutes.get("/buscar", async (c) => {
 pacienteRoutes.post("/", async (c) => {
   try {
     const body = (await c.req.json<PacienteAlta>().catch(() => ({}))) as PacienteAlta;
-    const paciente = await withSql(c.env, c.executionCtx, (sql) => crearPaciente(sql, body));
+    const paciente = await withSql(c.env, c.executionCtx, (sql) =>
+      crearPaciente(sql, body, sesionDesdeAuth(c).userId)
+    );
     return c.json({ ok: true, paciente, alta_requerida: false }, 201);
   } catch (error) {
     return pacienteError(c, error, "paciente_crear_failed");
@@ -52,8 +54,8 @@ pacienteRoutes.get("/:id/historial", async (c) => {
     const id = c.req.param("id") ?? "";
     if (!isUuid(id)) return jsonError(c, 400, "Identificador de paciente inválido.");
     const payload = await withSql(c.env, c.executionCtx, async (sql) => {
-      const paciente = await exigirPaciente(sql, id);
-      const historial = await listHistorialPaciente(sql, id);
+      const paciente = await exigirPaciente(sql, id, sesionDesdeAuth(c));
+      const historial = await listHistorialPaciente(sql, id, sesionDesdeAuth(c));
       return { paciente, historial };
     });
     return c.json({ ok: true, ...payload });
@@ -67,8 +69,8 @@ pacienteRoutes.get("/:id", async (c) => {
     const id = c.req.param("id") ?? "";
     if (!isUuid(id)) return jsonError(c, 400, "Identificador de paciente inválido.");
     const payload = await withSql(c.env, c.executionCtx, async (sql) => {
-      const paciente = await exigirPaciente(sql, id);
-      const historial = await listHistorialPaciente(sql, id);
+      const paciente = await exigirPaciente(sql, id, sesionDesdeAuth(c));
+      const historial = await listHistorialPaciente(sql, id, sesionDesdeAuth(c));
       return { paciente, historial };
     });
     return c.json({ ok: true, ...payload });

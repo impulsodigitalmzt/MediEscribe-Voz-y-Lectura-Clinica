@@ -7,7 +7,9 @@ import type {
   IndicacionTerapeutica,
   NotaClinica,
   RecetaPaciente,
+  SignosVitales,
 } from "./nota-types";
+import { vacioSignosVitales } from "./nota-types";
 
 export type {
   DatosMedico,
@@ -15,7 +17,9 @@ export type {
   IndicacionTerapeutica,
   NotaClinica,
   RecetaPaciente,
+  SignosVitales,
 } from "./nota-types";
+export { vacioSignosVitales } from "./nota-types";
 
 const NO_MENCIONADO = "[NO MENCIONADO]";
 
@@ -42,33 +46,47 @@ const IDIOMA_NOMBRE: Record<string, string> = {
   sw: "Kiswahili",
 };
 
-const SYSTEM_PROMPT = `Actúa como un médico experto. Recibe la transcripción de una consulta y estructúrala en un objeto JSON con los siguientes campos obligatorios: motivo_consulta, padecimiento_actual, interrogatorio, exploracion_fisica, diagnostico (incluyendo CIE-10 si es posible), plan_tratamiento, medicamentos y pronostico. El texto debe estar redactado con terminología médica profesional y alineado a la norma NOM-004-SSA3.
+const SYSTEM_PROMPT = `Eres el motor de documentación clínica de MediEscribe. NO transcribas: SINTETIZA y ORDENA la consulta en SOAP alineado a NOM-004-SSA3-2012.
+
+MISIÓN: del audio/texto extrae solo hechos clínicos, redáctalos en español médico profesional y rellénalos en JSON. Cada campo es un tipo de dato distinto.
 
 SALIDA: un solo JSON válido (sin markdown) con:
 - idioma_detectado (ISO 639-1)
-- nota_medica_espanol (objeto, SIEMPRE español clínico profesional)
+- nota_medica_espanol (objeto, SIEMPRE español clínico)
 - receta_paciente_nativo (objeto, idioma del paciente)
 
-nota_medica_espanol DEBE incluir estas claves:
-- motivo_consulta: razón breve de la visita (una o dos frases). NUNCA el relato completo.
-- padecimiento_actual: historia de la enfermedad actual (inicio, cronología, síntomas, factores, evolución). Distinto del motivo.
-- interrogatorio: interrogatorio dirigido / revisión por sistemas. Si no hubo, indica que no se documentó.
-- exploracion_fisica: signos vitales y hallazgos. Si no se exploró, indícalo de forma profesional.
-- diagnostico: impresión diagnóstica con código CIE-10 cuando sea posible, p. ej. "Cefalea tensional (CIE-10: G44.2)".
-- plan_tratamiento: plan terapéutico, estudios, medidas no farmacológicas y seguimiento.
-- medicamentos: fármacos indicados o que el paciente ya toma, con dosis, vía y periodicidad si se mencionaron.
-- pronostico: pronóstico clínico (bueno, reservado, etc.) según lo dicho o la impresión razonable del cuadro descrito.
-- tratamiento: array opcional {medicamento, dosis, via, periodicidad}.
-- resumen: 2-4 oraciones (motivo, dx, plan). NO la transcripción cruda.
+nota_medica_espanol DEBE incluir:
+
+soap: {
+  subjetivo: síntesis S (motivo + HEA + interrogatorio pertinente, 3-8 frases),
+  objetivo: síntesis O (vitales + exploración + estudios mencionados),
+  analisis: síntesis A (impresión diagnóstica, razonamiento breve, diferenciales si aplica),
+  plan: síntesis P (tratamiento, estudios, medidas, seguimiento)
+}
+
+Campos NOM-004 (obligatorios, distintos entre sí):
+- motivo_consulta: 1-2 frases. NUNCA el relato completo.
+- padecimiento_actual: HEA (inicio, cronología, síntomas, factores, evolución).
+- interrogatorio: dirigido / revisión por sistemas. Si no hubo: indícalo.
+- exploracion_fisica: hallazgos. Si no se exploró: "No se documentó exploración física en la transcripción."
+- signos_vitales: objeto con strings (vacío si no se dijeron): ta_sistolica, ta_diastolica, temperatura, fc, fr, spo2, peso, talla, imc, glucosa. Extrae números si el médico los dictó (p. ej. "tensión 120/80", "sat 98"). Calcula imc si hay peso (kg) y talla (cm).
+- diagnostico: impresión diagnóstica. No copies el dictado.
+- diagnostico_cie10: código CIE-10 más probable del diagnóstico verbalizado (p. ej. "M54.5"). Inferible; no inventes un cuadro clínico distinto.
+- diagnostico_presuntivo, diagnosticos_diferenciales, pronostico
+- plan / plan_tratamiento: terapéutica, no farmacológico y control.
+- tratamiento: array {medicamento, dosis, via, periodicidad} SOLO fármacos indicados ahora. Estructura estricta.
+- solicitudes_estudio: array de strings (labs, imagen). También resume en "estudios".
+- medicamentos: texto de fármacos actuales o indicados.
+- resumen: 2-4 oraciones (motivo, dx+CIE-10, plan). NUNCA transcripción cruda.
+- alergias, antecedentes_personales, seguimiento si se mencionaron.
 
 PROHIBIDO:
-- Copiar la transcripción completa en cualquier campo.
-- Pegar el mismo párrafo en dos o más campos.
-- Inventar datos clínicos no dichos (el CIE-10 sí puede inferirse del diagnóstico verbalizado).
-- Devolver texto plano. Solo JSON.
+- Copiar la transcripción en cualquier campo.
+- Pegar el mismo párrafo en dos campos.
+- Inventar síntomas, signos, dosis o estudios no dichos.
+- Devolver texto plano.
 
-EJEMPLO DE ERROR: motivo_consulta = padecimiento_actual = diagnostico = todo el dictado.
-EJEMPLO CORRECTO: motivo_consulta "Cefalea de 3 días"; padecimiento_actual "Inicio gradual, 7/10, sin fiebre"; diagnostico "Cefalea tensional (CIE-10: G44.2)"; exploracion_fisica "No se documentó exploración física en la transcripción." si no se exploró.
+EJEMPLO CORRECTO: motivo "Dolor lumbar crónico"; padecimiento "3 meses, 6/10, empeora al estar de pie"; diagnostico "Lumbalgia (CIE-10: M54.5)"; diagnostico_cie10 "M54.5"; tratamiento [{medicamento:"Naproxeno",dosis:"500 mg",via:"oral",periodicidad:"cada 12 horas"}].
 
 receta_paciente_nativo: indicaciones claras para el paciente, no copies la nota.`;
 
@@ -170,15 +188,39 @@ function sanitizarNotaContraTranscripcion(nota: NotaClinica, transcripcion: stri
   return next;
 }
 
+function textoPlano(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function aplanarSoap(raw: Record<string, unknown>): Record<string, unknown> {
+  const soap = asObject(raw.soap);
+  if (!soap) return raw;
+  const next = { ...raw };
+  const subjetivo = textoPlano(soap.subjetivo);
+  const objetivo = textoPlano(soap.objetivo);
+  const analisis = textoPlano(soap.analisis) || textoPlano(soap.análisis);
+  const planSoap = textoPlano(soap.plan);
+  if (!textoPlano(next.padecimiento_actual) && subjetivo) next.padecimiento_actual = subjetivo;
+  if (!textoPlano(next.motivo_consulta) && subjetivo) {
+    const corta = subjetivo.split(/[.!?]/)[0]?.trim() || subjetivo;
+    next.motivo_consulta = corta.slice(0, 220);
+  }
+  if (!textoPlano(next.exploracion_fisica) && objetivo) next.exploracion_fisica = objetivo;
+  if (!textoPlano(next.diagnostico) && analisis) next.diagnostico = analisis;
+  if (!textoPlano(next.plan) && !textoPlano(next.plan_tratamiento) && planSoap) next.plan = planSoap;
+  return next;
+}
+
 function objetoNotaDesdeRespuesta(raw: Record<string, unknown>): Record<string, unknown> {
   const nested = asObject(raw.nota_medica_espanol) ?? asObject(raw.nota);
-  if (nested) return nested;
+  if (nested) return aplanarSoap(nested);
   if (
     typeof raw.motivo_consulta === "string" ||
     typeof raw.padecimiento_actual === "string" ||
-    typeof raw.plan_tratamiento === "string"
+    typeof raw.plan_tratamiento === "string" ||
+    asObject(raw.soap)
   ) {
-    return raw;
+    return aplanarSoap(raw);
   }
   return {};
 }
@@ -275,10 +317,13 @@ export function notaDesdeExpediente(
     antecedentes_familiares: ant.heredo_familiares ?? "",
     antecedentes_sociales: ant.personales_no_patologicos ?? "",
     exploracion_fisica: "",
+    signos_vitales: vacioSignosVitales(),
     estudios: "",
+    solicitudes_estudio: [],
     diagnostico_presuntivo: "",
     diagnosticos_diferenciales: "",
     diagnostico: "",
+    diagnostico_cie10: "",
     pronostico: "",
     plan: "",
     tratamiento: [],
@@ -314,7 +359,7 @@ export async function redactarNotaClinica(
     { role: "system", content: SYSTEM_PROMPT },
     {
       role: "user",
-      content: `Actúa como un médico experto. Recibe la transcripción de una consulta y estructúrala en un objeto JSON con los siguientes campos obligatorios: motivo_consulta, padecimiento_actual, interrogatorio, exploracion_fisica, diagnostico (incluyendo CIE-10 si es posible), plan_tratamiento, medicamentos y pronostico. El texto debe estar redactado con terminología médica profesional y alineado a la norma NOM-004-SSA3.
+      content: `Sintetiza esta consulta en SOAP + NOM-004-SSA3. No transcribas: ordena motivo, HEA, exploración, signos vitales estructurados, diagnóstico con CIE-10, receta estructurada y plan.
 
 Especialidad: ${especialidad}
 Idioma de la receta (receta_paciente_nativo e idioma_detectado): ${idiomaHint || "desconocido — detéctalo"} (${nombreNativo})
@@ -348,8 +393,9 @@ ${clipped}`,
       pronosticoChars: parsed.nota.pronostico.length,
       motivoEqualsTranscript: parsed.nota.motivo_consulta.trim() === clipped.trim(),
       padecimientoEqualsTranscript: parsed.nota.padecimiento_actual.trim() === clipped.trim(),
-      motivoPreview: parsed.nota.motivo_consulta.slice(0, 180),
-      diagnosticoPreview: parsed.nota.diagnostico.slice(0, 120),
+      tieneCie10: Boolean(parsed.nota.diagnostico_cie10),
+      vitalesLlenos: Object.values(parsed.nota.signos_vitales).filter(Boolean).length,
+      recetas: parsed.nota.tratamiento.length,
     })
   );
   return parsed;
@@ -404,10 +450,13 @@ export function normalizeNota(
     antecedentes_familiares: text("antecedentes_familiares"),
     antecedentes_sociales: text("antecedentes_sociales"),
     exploracion_fisica: text("exploracion_fisica"),
+    signos_vitales: parseSignosVitales(raw, text("exploracion_fisica")),
     estudios: text("estudios"),
+    solicitudes_estudio: parseSolicitudesEstudio(raw),
     diagnostico_presuntivo: text("diagnostico_presuntivo"),
     diagnosticos_diferenciales: text("diagnosticos_diferenciales"),
     diagnostico: textoDiagnostico(raw, text),
+    diagnostico_cie10: extraerCie10(raw, text),
     pronostico: text("pronostico", "pronóstico"),
     plan: text("plan_tratamiento", "plan", "tratamiento_plan"),
     tratamiento,
@@ -418,6 +467,14 @@ export function normalizeNota(
     secciones_faltantes: list("secciones_faltantes"),
     sello_responsable: "",
   };
+
+  if (!nota.estudios || nota.estudios === NO_MENCIONADO) {
+    const estudios = nota.solicitudes_estudio.filter(Boolean).join("; ");
+    if (estudios) nota.estudios = estudios;
+  }
+  if (nota.diagnostico !== NO_MENCIONADO && nota.diagnostico_cie10 && !/cie-?10/i.test(nota.diagnostico)) {
+    nota.diagnostico = `${nota.diagnostico} (CIE-10: ${nota.diagnostico_cie10})`;
+  }
 
   if (nota.resumen === NO_MENCIONADO) {
     nota.resumen = buildResumen(nota);
@@ -584,12 +641,109 @@ function textoMedicamentos(raw: Record<string, unknown>): string {
   return NO_MENCIONADO;
 }
 
+function campoSigno(source: Record<string, unknown>, ...keys: string[]): string {
+  for (const key of keys) {
+    const value = source[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+    if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  }
+  return "";
+}
+
+function extraerSignosDeTexto(texto: string): Partial<SignosVitales> {
+  const out: Partial<import("./nota-types").SignosVitales> = {};
+  const ta = texto.match(/(?:TA|PA|tensi[oó]n(?:\s+arterial)?)[^\d]{0,16}(\d{2,3})\s*[/]\s*(\d{2,3})/i);
+  if (ta) {
+    out.ta_sistolica = ta[1];
+    out.ta_diastolica = ta[2];
+  }
+  const temp = texto.match(/(?:temp(?:eratura)?|t[°º])[^\d]{0,8}(\d{2}(?:[.,]\d+)?)/i);
+  if (temp) out.temperatura = temp[1].replace(",", ".");
+  const fc = texto.match(/\b(?:FC|frecuencia\s+card[ií]aca|lpm)[^\d]{0,8}(\d{2,3})/i);
+  if (fc) out.fc = fc[1];
+  const fr = texto.match(/\b(?:FR|frecuencia\s+respiratoria|rpm)[^\d]{0,8}(\d{1,2})/i);
+  if (fr) out.fr = fr[1];
+  const spo2 = texto.match(/(?:SpO2|sat(?:uraci[oó]n)?)[^\d]{0,8}(\d{2,3})/i);
+  if (spo2) out.spo2 = spo2[1];
+  const peso = texto.match(/\bpeso[^\d]{0,8}(\d{2,3}(?:[.,]\d+)?)\s*kg/i);
+  if (peso) out.peso = peso[1].replace(",", ".");
+  const talla = texto.match(/\b(?:talla|estatura|altura)[^\d]{0,8}(\d{2,3}(?:[.,]\d+)?)\s*cm/i);
+  if (talla) out.talla = talla[1].replace(",", ".");
+  const glucosa = texto.match(/\bglucosa[^\d]{0,8}(\d{2,3}(?:[.,]\d+)?)/i);
+  if (glucosa) out.glucosa = glucosa[1].replace(",", ".");
+  return out;
+}
+
+function calcularImc(peso: string, talla: string): string {
+  const kg = Number.parseFloat(peso.replace(",", "."));
+  const cm = Number.parseFloat(talla.replace(",", "."));
+  if (!Number.isFinite(kg) || !Number.isFinite(cm) || kg <= 0 || cm <= 0) return "";
+  const metros = cm > 3 ? cm / 100 : cm;
+  if (metros <= 0) return "";
+  return (kg / (metros * metros)).toFixed(2);
+}
+
+function parseSignosVitales(raw: Record<string, unknown>, exploracion: string): SignosVitales {
+  const source = asObject(raw.signos_vitales) ?? asObject(raw.vitales) ?? asObject(raw.signos) ?? {};
+  const fromText = extraerSignosDeTexto(`${exploracion} ${textoPlano(raw.objetivo)}`);
+  const signos = vacioSignosVitales();
+  signos.ta_sistolica = campoSigno(source, "ta_sistolica", "ta_sis", "sistolica") || fromText.ta_sistolica || "";
+  signos.ta_diastolica = campoSigno(source, "ta_diastolica", "ta_dia", "diastolica") || fromText.ta_diastolica || "";
+  signos.temperatura = campoSigno(source, "temperatura", "temp") || fromText.temperatura || "";
+  signos.fc = campoSigno(source, "fc", "frecuencia_cardiaca", "pulso") || fromText.fc || "";
+  signos.fr = campoSigno(source, "fr", "frecuencia_respiratoria") || fromText.fr || "";
+  signos.spo2 = campoSigno(source, "spo2", "saturacion", "sat") || fromText.spo2 || "";
+  signos.peso = campoSigno(source, "peso", "weight") || fromText.peso || "";
+  signos.talla = campoSigno(source, "talla", "estatura", "altura") || fromText.talla || "";
+  signos.imc = campoSigno(source, "imc", "bmi") || calcularImc(signos.peso, signos.talla);
+  signos.glucosa = campoSigno(source, "glucosa", "glucose") || fromText.glucosa || "";
+  return signos;
+}
+
+function fusionarSignos(prev?: SignosVitales, next?: SignosVitales): SignosVitales {
+  const merged = vacioSignosVitales();
+  const a = prev ?? vacioSignosVitales();
+  const b = next ?? vacioSignosVitales();
+  (Object.keys(merged) as Array<keyof SignosVitales>).forEach((key) => {
+    merged[key] = b[key] || a[key] || "";
+  });
+  if (!merged.imc) merged.imc = calcularImc(merged.peso, merged.talla);
+  return merged;
+}
+
+function parseSolicitudesEstudio(raw: Record<string, unknown>): string[] {
+  const value = raw.solicitudes_estudio ?? raw.estudios_solicitados ?? raw.ordenes;
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => (typeof item === "string" ? item.trim() : ""))
+      .filter(Boolean);
+  }
+  if (typeof value === "string" && value.trim()) {
+    return value.split(/[;\n]+/).map((item) => item.trim()).filter(Boolean);
+  }
+  return [];
+}
+
+function extraerCie10(
+  raw: Record<string, unknown>,
+  text: (...keys: string[]) => string
+): string {
+  const fromField = text("diagnostico_cie10", "cie10", "cie_10", "codigo_cie10", "codigo_cie_10");
+  if (fromField !== NO_MENCIONADO) {
+    const code = fromField.match(/[A-TV-Z][0-9]{2}(?:\.[0-9]{1,4})?/i);
+    return code ? code[0].toUpperCase() : fromField.replace(/^CIE-?10\s*:?\s*/i, "").trim();
+  }
+  const diagnostico = text("diagnostico", "diagnóstico");
+  const match = diagnostico.match(/CIE-?10\s*:?\s*([A-TV-Z][0-9]{2}(?:\.[0-9]{1,4})?)/i);
+  return match?.[1]?.toUpperCase() ?? "";
+}
+
 function textoDiagnostico(
   raw: Record<string, unknown>,
   text: (...keys: string[]) => string
 ): string {
   const diagnostico = text("diagnostico", "diagnóstico");
-  const cie = text("cie10", "cie_10", "codigo_cie10", "codigo_cie_10");
+  const cie = text("cie10", "cie_10", "codigo_cie10", "codigo_cie_10", "diagnostico_cie10");
   if (diagnostico === NO_MENCIONADO) return diagnostico;
   if (cie === NO_MENCIONADO) return diagnostico;
   if (/cie-?10/i.test(diagnostico) || diagnostico.includes(cie)) return diagnostico;
@@ -616,8 +770,7 @@ async function completarNotaNom004(
       { role: "system", content: SYSTEM_PROMPT },
       {
         role: "user",
-        content: `Completa SOLO los faltantes NOM-004 con redacción clínica profesional (no copies la transcripción).
-Campos SOAP obligatorios: motivo_consulta, padecimiento_actual, interrogatorio, exploracion_fisica, diagnostico (con CIE-10 si es posible), plan_tratamiento, medicamentos, pronostico.
+        content: `Completa SOLO los faltantes NOM-004. Sintetiza SOAP; extrae signos_vitales, diagnostico_cie10 y tratamiento estructurado si constan en el dictado.
 Si un dato no está en la transcripción, descríbelo como no documentado. PROHIBIDO pegar el dictado completo.
 Faltantes: ${dictamen.guia.join("; ")}
 ${contextoExpediente ? `\n${contextoExpediente}\n` : ""}
@@ -638,6 +791,10 @@ Devuelve JSON con nota_medica_espanol. Español clínico. Cada campo distinto.`,
     reparada.medico_especialidad = nota.medico_especialidad;
     reparada.fecha = nota.fecha;
     reparada.hora = nota.hora;
+    reparada.signos_vitales = fusionarSignos(nota.signos_vitales, reparada.signos_vitales);
+    if (!reparada.tratamiento.length) reparada.tratamiento = nota.tratamiento;
+    if (!reparada.diagnostico_cie10) reparada.diagnostico_cie10 = nota.diagnostico_cie10;
+    if (!reparada.solicitudes_estudio.length) reparada.solicitudes_estudio = nota.solicitudes_estudio;
     return sanitizarNotaContraTranscripcion(
       aplicarSelloLegal(reparada, {
         medicoNombre: nota.medico_nombre,

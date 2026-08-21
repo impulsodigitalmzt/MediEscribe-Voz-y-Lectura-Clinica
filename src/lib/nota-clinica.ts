@@ -323,19 +323,17 @@ export async function redactarNotaClinica(
     pacienteConocido && pacienteConocido !== "Paciente sin identificar" ? pacienteConocido : "";
   const idiomaHint = normalizeLanguageCode(idiomaWhisper) || detectarIdiomaTexto(clipped);
   const soap = await sintetizarSoapClinico(env, clipped);
-  soap.subjetivo = textoCampoClinico(soap.subjetivo);
-  if (!soap.subjetivo && !esRuidoNoClinico(clipped)) {
-    soap.subjetivo = clipped;
-  }
   const base = normalizeNota(
     {
+      motivo_consulta: soap.motivo_consulta,
+      padecimiento_actual: soap.padecimiento_actual,
       subjetivo: soap.subjetivo,
       objetivo: soap.objetivo,
       analisis: soap.analisis,
-      padecimiento_actual: soap.subjetivo,
+      plan: soap.plan,
+      plan_tratamiento: soap.plan,
       exploracion_fisica: soap.objetivo,
       diagnostico: soap.analisis,
-      plan_tratamiento: soap.plan_tratamiento,
       diagnostico_cie10: soap.diagnostico_cie10,
       pronostico: soap.pronostico,
       tratamiento: soap.medicamentos,
@@ -344,14 +342,14 @@ export async function redactarNotaClinica(
     conocido,
     datos
   );
-  const nota = forzarNotaTextoPlano(sanitizarNotaContraTranscripcion(aplicarSoapANota(base, soap), clipped));
+  const nota = forzarNotaTextoPlano(aplicarSoapANota(base, soap));
   const receta = recetaDesdeNota(nota, idiomaHint || "es");
   receta.idioma = receta.idioma || idiomaHint || "es";
   receta.idioma_nombre = receta.idioma_nombre || nombreIdioma(receta.idioma);
   logSinPhi("nota_clinica_ok", {
     especialidad,
     transcriptChars: clipped.length,
-    soapKeys: ["subjetivo", "objetivo", "analisis", "plan_tratamiento", "medicamentos", "diagnostico_cie10", "pronostico"],
+    soapKeys: ["motivo_consulta", "padecimiento_actual", "subjetivo", "objetivo", "analisis", "plan"],
     motivoChars: nota.motivo_consulta?.length ?? 0,
     padecimientoChars: nota.padecimiento_actual?.length ?? 0,
     tieneCie10: Boolean(nota.diagnostico_cie10),

@@ -11,7 +11,7 @@ import VoiceDictationPanel from './VoiceDictationPanel';
 import NoteEditor from './NoteEditor';
 import ConsentimientoInformado from './ConsentimientoInformado';
 import { stampMexicoNow } from '../../utils';
-import { asegurarNotaStrings, extraerSoapDesdeRespuesta, mapearNotaDesdeIA, notaClinicaVacia, soapDesdeBorrador, transcripcionPlana } from '../../lib/mapearNotaClinica';
+import { asegurarNotaStrings, extraerSoapDesdeRespuesta, mapearNotaDesdeIA, notaClinicaVacia, transcripcionPlana } from '../../lib/mapearNotaClinica';
 
 const EMPTY_NOTA: NotaClinica = notaClinicaVacia();
 
@@ -116,11 +116,11 @@ export default function ConsultaWorkspace() {
 
   useEffect(() => {
     const SOAP_IDS = {
-      motivo_consulta: 'id_del_input_motivo',
-      padecimiento_actual: 'id_del_input_padecimiento',
-      objetivo: 'id_del_input_objetivo',
-      analisis: 'id_del_input_analisis',
-      plan: 'id_del_input_plan',
+      motivo_consulta: 'motivo_consulta',
+      padecimiento_actual: 'padecimiento_actual',
+      objetivo: 'objetivo',
+      analisis: 'analisis',
+      plan: 'plan',
     } as const;
 
     const pintar = (data?: {
@@ -212,29 +212,20 @@ export default function ConsultaWorkspace() {
     setNota(mapped);
   };
 
-  const asignarSoapAUi = (result: { nota?: NotaClinica | null; consulta?: ConsultaMedica | null } | null, borrador: string) => {
-    const piso = soapDesdeBorrador(borrador);
-    const data = extraerSoapDesdeRespuesta(result, borrador);
-    const motivo = data.motivo_consulta || piso.motivo_consulta;
-    const padecimiento = data.padecimiento_actual || piso.padecimiento_actual;
-    console.log('PINTANDO SOAP STRING', {
-      motivo,
-      padecimiento,
-      tipos: { motivo: typeof motivo, padecimiento: typeof padecimiento },
-    });
+  const asignarSoapAUi = (result: { nota?: NotaClinica | null; consulta?: ConsultaMedica | null } | null) => {
+    const soap = extraerSoapDesdeRespuesta(result);
+    console.log('SOAP JSON → UI:', soap);
     setNota((prev) => ({
       ...prev,
-      motivo_consulta: motivo || prev.motivo_consulta,
-      padecimiento_actual: padecimiento || prev.padecimiento_actual,
-      subjetivo: data.subjetivo || padecimiento || prev.subjetivo,
-      objetivo: data.objetivo || prev.objetivo,
-      exploracion_fisica: data.exploracion_fisica || data.objetivo || prev.exploracion_fisica,
-      analisis: data.analisis || prev.analisis,
-      diagnostico: data.diagnostico || data.analisis || prev.diagnostico,
-      diagnostico_cie10: data.diagnostico_cie10 || prev.diagnostico_cie10,
-      pronostico: data.pronostico || prev.pronostico,
-      plan: data.plan || prev.plan,
-      interrogatorio: data.interrogatorio || prev.interrogatorio,
+      motivo_consulta: soap.motivo_consulta,
+      padecimiento_actual: soap.padecimiento_actual,
+      subjetivo: soap.subjetivo,
+      objetivo: soap.objetivo,
+      exploracion_fisica: soap.objetivo,
+      analisis: soap.analisis,
+      diagnostico: soap.analisis,
+      plan: soap.plan,
+      diagnostico_cie10: soap.analisis ? prev.diagnostico_cie10 : '',
     }));
   };
 
@@ -258,7 +249,6 @@ export default function ConsultaWorkspace() {
     }
     console.log('Enviando a IA:', texto);
     setDictado(texto);
-    asignarSoapAUi(null, texto);
     setGenerating(true);
     setError('');
     setSavedMsg('');
@@ -288,7 +278,7 @@ export default function ConsultaWorkspace() {
       }
       const transcripcion = transcripcionPlana(result.transcripcion);
       if (transcripcion) setDictado(transcripcion);
-      asignarSoapAUi(result, texto);
+      asignarSoapAUi(result);
       if (result.receta) setReceta({ ...EMPTY_RECETA, ...result.receta, medicamentos: result.receta.medicamentos ?? [] });
       setGuardia(result.guardia_legal ?? result.consulta?.guardia_legal);
       setSavedMsg('Nota SOAP sintetizada. Revise S-O-A-P y guarde.');
@@ -350,7 +340,7 @@ export default function ConsultaWorkspace() {
       }
       const transcripcion = transcripcionPlana(result.transcripcion);
       if (transcripcion) setDictado(transcripcion);
-      asignarSoapAUi(result, transcripcion || dictado);
+      asignarSoapAUi(result);
       if (result.receta) setReceta({ ...EMPTY_RECETA, ...result.receta, medicamentos: result.receta.medicamentos ?? [] });
       setGuardia(result.guardia_legal ?? result.consulta?.guardia_legal);
       setSavedMsg('Audio enviado al Worker (Whisper → SOAP). El borrador muestra la transcripción; revise CIE-10 y receta, luego guarde.');

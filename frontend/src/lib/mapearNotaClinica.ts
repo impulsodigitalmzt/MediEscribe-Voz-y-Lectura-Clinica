@@ -174,83 +174,34 @@ export function notaClinicaVacia(): NotaClinica {
   };
 }
 
-export function soapDesdeBorrador(borrador: unknown): {
-  motivo_consulta: string;
-  padecimiento_actual: string;
-  subjetivo: string;
-} {
-  const original = asTexto(borrador);
-  if (!original) return { motivo_consulta: '', padecimiento_actual: '', subjetivo: '' };
-  const saludo =
-    /^(?:hola|buenos?\s*d[ií]as?|buenas\s*(?:tardes|noches)|d[ií]game(?:\s+en\s+qu[eé]\s+puedo\s+servirle)?|s[ií]\s+doctor|pues\s+mira)[\s,.;:]*/i;
-  let limpio = original;
-  for (let i = 0; i < 8 && saludo.test(limpio); i += 1) {
-    limpio = limpio.replace(saludo, '').trim();
-  }
-  if (!limpio) limpio = original;
-  const motivo = (limpio.split(/[.!?]/)[0] || limpio).trim().slice(0, 220);
-  return {
-    motivo_consulta: motivo,
-    padecimiento_actual: limpio,
-    subjetivo: limpio,
-  };
-}
-
 export function transcripcionPlana(value: unknown): string {
   return asTexto(value);
 }
 
+/**
+ * Extrae el contrato SOAP (solo strings) desde la respuesta del Worker.
+ * No copia el borrador. Si Groq no trajo clínica, el campo queda "".
+ */
 export function extraerSoapDesdeRespuesta(
   result: {
     nota?: Partial<NotaClinica> | Record<string, unknown> | null;
     soap?: Record<string, unknown> | null;
     consulta?: { nota_estructurada?: Partial<NotaClinica> | Record<string, unknown> | null } | null;
   } | null | undefined,
-  borrador = '',
-): Pick<NotaClinica, 'motivo_consulta' | 'padecimiento_actual' | 'subjetivo' | 'objetivo' | 'exploracion_fisica' | 'analisis' | 'diagnostico' | 'diagnostico_cie10' | 'pronostico' | 'plan' | 'interrogatorio'> {
+): Pick<NotaClinica, 'motivo_consulta' | 'padecimiento_actual' | 'subjetivo' | 'objetivo' | 'analisis' | 'plan'> {
   const notaRaw = (result?.nota ?? result?.consulta?.nota_estructurada ?? {}) as Record<string, unknown>;
   const nestedNota = (asObject(notaRaw.nota_medica_espanol) ?? asObject(notaRaw.nota) ?? notaRaw) as Record<string, unknown>;
   const soap = asObject(nestedNota.soap) ?? asObject(result?.soap) ?? {};
-  const plano = aplanarSoap({ ...nestedNota, soap });
-
-  const motivo =
-    asTexto(plano.motivo_consulta) ||
-    asTexto(plano.motivo) ||
-    asTexto(soap.subjetivo) ||
-    asTexto(plano.subjetivo);
-  const padecimiento =
-    asTexto(plano.padecimiento_actual) ||
-    asTexto(plano.subjetivo) ||
-    asTexto(soap.subjetivo) ||
-    motivo;
-  const objetivo =
-    asTexto(plano.objetivo) ||
-    asTexto(plano.exploracion_fisica) ||
-    asTexto(soap.objetivo);
-  const analisis =
-    asTexto(plano.analisis) ||
-    asTexto(plano.diagnostico) ||
-    asTexto(soap.analisis);
-  const plan =
-    asTexto(plano.plan) ||
-    asTexto(plano.plan_tratamiento) ||
-    asTexto(soap.plan) ||
-    asTexto(soap.plan_tratamiento);
-
-  const clinico = soapDesdeBorrador(borrador);
-
+  const plano = { ...nestedNota, ...soap };
+  const motivo = asTexto(plano.motivo_consulta);
+  const padecimiento = asTexto(plano.padecimiento_actual);
   return {
-    motivo_consulta: motivo || clinico.motivo_consulta,
-    padecimiento_actual: padecimiento || clinico.padecimiento_actual,
-    subjetivo: padecimiento || clinico.subjetivo,
-    objetivo,
-    exploracion_fisica: objetivo,
-    analisis,
-    diagnostico: analisis,
-    diagnostico_cie10: asTexto(plano.diagnostico_cie10),
-    pronostico: asTexto(plano.pronostico) || asTexto(plano.pronóstico),
-    plan,
-    interrogatorio: asTexto(plano.interrogatorio),
+    motivo_consulta: motivo,
+    padecimiento_actual: padecimiento,
+    subjetivo: asTexto(plano.subjetivo) || padecimiento,
+    objetivo: asTexto(plano.objetivo),
+    analisis: asTexto(plano.analisis),
+    plan: asTexto(plano.plan) || asTexto(plano.plan_tratamiento),
   };
 }
 
@@ -269,19 +220,18 @@ export function mapearNotaDesdeIA(
     solicitudes_estudio: parseSolicitudes(raw, base.solicitudes_estudio ?? []),
   };
 
-  mapped.motivo_consulta = asTexto(raw.motivo_consulta) || asTexto(raw.subjetivo) || base.motivo_consulta;
-  mapped.padecimiento_actual = asTexto(raw.padecimiento_actual) || asTexto(raw.subjetivo) || base.padecimiento_actual;
+  mapped.motivo_consulta = asTexto(raw.motivo_consulta);
+  mapped.padecimiento_actual = asTexto(raw.padecimiento_actual);
   mapped.interrogatorio = asTexto(raw.interrogatorio) || base.interrogatorio;
-  mapped.exploracion_fisica = asTexto(raw.exploracion_fisica) || asTexto(raw.objetivo) || base.exploracion_fisica;
-  const dx = diagnosticoConCie10(raw);
-  mapped.diagnostico = dx.diagnostico || base.diagnostico;
-  mapped.diagnostico_cie10 = dx.cie10 || base.diagnostico_cie10;
-  mapped.plan = asTexto(raw.plan_tratamiento) || asTexto(raw.plan) || base.plan;
+  mapped.exploracion_fisica = asTexto(raw.objetivo) || asTexto(raw.exploracion_fisica) || base.exploracion_fisica;
+  mapped.plan = asTexto(raw.plan);
+  mapped.subjetivo = asTexto(raw.subjetivo) || mapped.padecimiento_actual;
+  mapped.objetivo = asTexto(raw.objetivo);
+  mapped.analisis = asTexto(raw.analisis);
+  mapped.diagnostico = asTexto(raw.analisis) || asTexto(raw.diagnostico);
+  mapped.diagnostico_cie10 = asTexto(raw.diagnostico_cie10);
+  mapped.pronostico = asTexto(raw.pronostico);
   mapped.medicamentos = asTexto(raw.medicamentos) || base.medicamentos;
-  mapped.pronostico = asTexto(raw.pronostico) || asTexto(raw.pronóstico) || base.pronostico;
-  mapped.subjetivo = asTexto(raw.subjetivo) || mapped.padecimiento_actual || base.subjetivo;
-  mapped.objetivo = asTexto(raw.objetivo) || mapped.exploracion_fisica || base.objetivo;
-  mapped.analisis = asTexto(raw.analisis) || mapped.diagnostico || base.analisis;
   mapped.estudios = asTexto(raw.estudios) || mapped.solicitudes_estudio.join('; ') || base.estudios;
   if (Array.isArray((incoming as NotaClinica).tratamiento)) {
     mapped.tratamiento = (incoming as NotaClinica).tratamiento;

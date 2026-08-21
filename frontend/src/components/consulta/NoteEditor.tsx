@@ -69,11 +69,11 @@ export default function NoteEditor({
 
   useEffect(() => {
     const ids = {
-      motivo_consulta: 'id_del_input_motivo',
-      padecimiento_actual: 'id_del_input_padecimiento',
-      objetivo: 'id_del_input_objetivo',
-      analisis: 'id_del_input_analisis',
-      plan: 'id_del_input_plan',
+      motivo_consulta: 'motivo_consulta',
+      padecimiento_actual: 'padecimiento_actual',
+      objetivo: 'objetivo',
+      analisis: 'analisis',
+      plan: 'plan',
     };
     console.log('[SOAP auditoría IDs]', {
       nota: {
@@ -132,13 +132,13 @@ export default function NoteEditor({
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 items-start">
         <SoapCard id="soap-s" letter="S" title="Subjetivo" hint="Motivo, padecimiento e interrogatorio (NOM-004 6.1.1)">
-          <Area id="id_del_input_motivo" name="motivo_consulta" label="Motivo de consulta" value={nota.motivo_consulta} onChange={(v) => setField('motivo_consulta', v)} locked={locked} compact />
+          <Area id="motivo_consulta" name="motivo_consulta" label="Motivo de consulta" value={nota.motivo_consulta} onChange={(v) => setField('motivo_consulta', v)} locked={locked} compact />
           <Area
-            id="id_del_input_padecimiento"
+            id="padecimiento_actual"
             name="padecimiento_actual"
             label="Subjetivo / padecimiento actual"
-            value={nota.subjetivo || nota.padecimiento_actual}
-            onChange={(v) => onNota({ ...nota, subjetivo: v, padecimiento_actual: v })}
+            value={nota.padecimiento_actual || nota.subjetivo}
+            onChange={(v) => onNota({ ...nota, padecimiento_actual: v, subjetivo: v })}
             locked={locked}
           />
           <Area label="Interrogatorio" value={nota.interrogatorio} onChange={(v) => setField('interrogatorio', v)} locked={locked} />
@@ -171,7 +171,7 @@ export default function NoteEditor({
             ) : null}
           </div>
           <Area
-            id="id_del_input_objetivo"
+            id="objetivo"
             name="objetivo"
             label="Objetivo / exploración física"
             value={nota.objetivo || nota.exploracion_fisica}
@@ -185,7 +185,7 @@ export default function NoteEditor({
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
             <div className="sm:col-span-2">
               <Area
-                id="id_del_input_analisis"
+                id="analisis"
                 name="analisis"
                 label="Análisis / diagnóstico"
                 value={nota.analisis || nota.diagnostico}
@@ -210,7 +210,7 @@ export default function NoteEditor({
         </SoapCard>
 
         <SoapCard id="soap-p" letter="P" title="Plan" hint="Tratamiento estructurado, seguimiento y evolución">
-          <Area id="id_del_input_plan" name="plan" label="Plan terapéutico" value={nota.plan} onChange={(v) => setField('plan', v)} locked={locked} />
+          <Area id="plan" name="plan" label="Plan terapéutico" value={nota.plan} onChange={(v) => setField('plan', v)} locked={locked} />
           <Section title="Receta estructurada">
             {(nota.tratamiento ?? []).map((row, index) => (
               <div key={index} className="grid grid-cols-1 sm:grid-cols-8 gap-2 mb-2">

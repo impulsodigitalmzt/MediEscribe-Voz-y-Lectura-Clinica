@@ -5,34 +5,33 @@ import { estaVacio, Nom004Error, type FaltanteNom004 } from "./guardia-legal";
 import type { IndicacionTerapeutica, NotaClinica } from "./nota-types";
 import { textoCampoClinico } from "./texto-campo";
 
-export const SOAP_SYSTEM_PROMPT = `Eres el motor de documentación clínica de MediEscribe (NOM-004-SSA3). Extraes ÚNICAMENTE hechos médicos de la transcripción y los colocas en JSON.
+export const SOAP_SYSTEM_PROMPT = `Eres médico redactor clínico de MediEscribe (NOM-004-SSA3). Lees un dictado conversacional y lo conviertes en una nota SOAP profesional.
 
-FILTRO DE RUIDO (obligatorio):
-- Ignora por completo saludos, despedidas, charla social, pruebas de micrófono o audio, comentarios técnicos sobre si el dictado «ya funciona», «ya quedó» o «ya trabaja bien», muletillas y cualquier frase ajena a la consulta.
-- Ejemplos a descartar: «hola», «buenos días», «buenas tardes», «prueba de micrófono», «uno dos tres», «¿me escuchas?», «ya trabaja bien», «ya quedó», «testing», «ya veo que sí».
-- Esas frases NO deben aparecer en ningún campo, ni siquiera resumidas o parafraseadas.
+REGLAS:
+1. Actúa como médico, no como transcriptor. Analiza el diálogo y redacta.
+2. Devuelve SOLO un objeto JSON plano. Cada valor es un string. Nunca un objeto, nunca un array (salvo que se pida).
+3. Llaves EXACTAS: motivo_consulta, padecimiento_actual, subjetivo, objetivo, analisis, plan.
+4. motivo_consulta: UNA frase clínica corta (2–8 palabras). Ejemplos correctos: "Odinofagia y fiebre", "Otalgia y odinofagia". Prohibido copiar el diálogo.
+5. padecimiento_actual: narrativa médica en tercera persona, profesional, basada solo en lo que dijo el paciente. Incluye síntomas, tiempo, intensidad y datos referidos (p. ej. temperatura). Nunca saludos ni muletillas.
+6. subjetivo: puede coincidir con padecimiento_actual o resumirlo. String. Si no hay clínica, "".
+7. objetivo: solo exploración, signos vitales u hallazgos EXPLÍCITOS en el dictado. Si el paciente refirió fiebre de 38 °C y no hay exploración física, deja objetivo "" (la fiebre referida va en padecimiento_actual). No inventes.
+8. analisis: impresión diagnóstica SOLO si se desprende de los síntomas dictados. Si no hay suficiente, "".
+9. plan: indicaciones SOLO si se dictaron. No inventes tratamiento. Si no hay plan dictado, "".
+10. Si el texto es solo saludo, charla, prueba de micrófono o ruido, TODOS los campos van "".
+11. Prohibido copiar "hola", "buenos días", "dígame", "prueba de micrófono" o el diálogo crudo a cualquier campo.
 
-ASIGNACIÓN SEMÁNTICA:
-- subjetivo: solo motivo de consulta, síntomas, padecimiento actual e historia clínica referida. Si no hay dato médico, "".
-- objetivo: solo exploración física, signos vitales o hallazgos dictados. Si no se exploró, "".
-- analisis: solo diagnóstico, impresión clínica o razonamiento médico dictado. Si no hay, "".
-- plan_tratamiento: solo plan, indicaciones o seguimiento dictados. Si no hay, "".
-- medicamentos: array de {medicamento, dosis, via, periodicidad} solo si se dictó un fármaco. Si no hay, [].
-- diagnostico_cie10: código CIE-10 SOLO si el diagnóstico está dictado o se desprende de hallazgos clínicos explícitos. Si no hay dato, "". NUNCA inventes un código.
-- pronostico: solo si el médico lo dictó. Si no, "".
+Ejemplo de salida con clínica:
+{"motivo_consulta":"Odinofagia y fiebre","padecimiento_actual":"Paciente refiere irritación faríngea con odinofagia a la deglución, fiebre nocturna de aproximadamente 38 °C y sensación de oídos tapados.","subjetivo":"Irritación faríngea, odinofagia, fiebre ~38 °C y otalgia/ocupación ótica referida.","objetivo":"","analisis":"","plan":""}
 
-CAMPOS VACÍOS POR DEFECTO:
-- Solo si el dictado es saludo, prueba de micrófono o charla sin dato médico, todos los campos van "".
-- Si hay información clínica (síntomas, exploración, diagnóstico, plan), LLENA el campo correspondiente con ese contenido médico. No lo dejes vacío.
-- Prohibido inventar datos que no estén en el dictado, usar saludos como motivo, o rellenar con frases genéricas.
-- No copies saludos. Sí puedes usar el texto clínico del dictado en el campo que le corresponda.
-
-Responde SOLO un objeto JSON con esas llaves.`;
+Responde ÚNICAMENTE el JSON.`;
 
 export type SoapClinico = {
+  motivo_consulta: string;
+  padecimiento_actual: string;
   subjetivo: string;
   objetivo: string;
   analisis: string;
+  plan: string;
   plan_tratamiento: string;
   medicamentos: IndicacionTerapeutica[];
   diagnostico_cie10: string;
@@ -104,23 +103,45 @@ function parseMedicamentos(raw: unknown): IndicacionTerapeutica[] {
 }
 
 export function parseSoapClinico(raw: Record<string, unknown>): SoapClinico {
+  const fromNota =
+    raw.nota_medica_espanol && typeof raw.nota_medica_espanol === "object" && !Array.isArray(raw.nota_medica_espanol)
+      ? (raw.nota_medica_espanol as Record<string, unknown>)
+      : raw.nota && typeof raw.nota === "object" && !Array.isArray(raw.nota)
+        ? (raw.nota as Record<string, unknown>)
+        : null;
   const nested =
     raw.soap && typeof raw.soap === "object" && !Array.isArray(raw.soap)
       ? (raw.soap as Record<string, unknown>)
-      : raw;
+      : fromNota?.soap && typeof fromNota.soap === "object" && !Array.isArray(fromNota.soap)
+        ? (fromNota.soap as Record<string, unknown>)
+        : fromNota ?? raw;
+  const campo = (...keys: string[]) => {
+    for (const key of keys) {
+      const value = asText(nested[key]) || asText(raw[key]) || (fromNota ? asText(fromNota[key]) : "");
+      if (value && !esRuidoNoClinico(value)) return value;
+    }
+    return "";
+  };
+  const motivo = campo("motivo_consulta");
+  const padecimiento = campo("padecimiento_actual");
+  const subjetivo = campo("subjetivo") || padecimiento;
+  const objetivo = campo("objetivo");
+  const analisis = campo("analisis", "análisis");
+  const plan = campo("plan", "plan_tratamiento");
   const cie = asText(raw.diagnostico_cie10) || asText(nested.diagnostico_cie10);
   const soap: SoapClinico = {
-    subjetivo: depurarTextoClinico(asText(nested.subjetivo) || asText(raw.subjetivo)),
-    objetivo: depurarTextoClinico(asText(nested.objetivo) || asText(raw.objetivo)),
-    analisis: depurarTextoClinico(asText(nested.analisis) || asText(nested.análisis) || asText(raw.analisis)),
-    plan_tratamiento: depurarTextoClinico(
-      asText(nested.plan_tratamiento) || asText(nested.plan) || asText(raw.plan_tratamiento) || asText(raw.plan)
-    ),
+    motivo_consulta: motivo,
+    padecimiento_actual: padecimiento,
+    subjetivo,
+    objetivo,
+    analisis,
+    plan,
+    plan_tratamiento: plan,
     medicamentos: parseMedicamentos(raw.medicamentos ?? nested.medicamentos),
     diagnostico_cie10: (cie.match(/[A-TV-Z][0-9]{2}(?:\.[0-9]{1,4})?/i)?.[0] ?? cie).toUpperCase(),
-    pronostico: depurarTextoClinico(asText(nested.pronostico) || asText(nested.pronóstico) || asText(raw.pronostico)),
+    pronostico: campo("pronostico", "pronóstico"),
   };
-  if (!soap.subjetivo && !soap.objetivo && !soap.analisis && !soap.plan_tratamiento) {
+  if (!soap.motivo_consulta && !soap.padecimiento_actual && !soap.subjetivo && !soap.objetivo && !soap.analisis && !soap.plan) {
     soap.diagnostico_cie10 = "";
     soap.pronostico = "";
     soap.medicamentos = [];
@@ -142,8 +163,8 @@ export function validarSoapClinico(soap: SoapClinico): FaltanteNom004[] {
   if (estaVacio(soap.analisis)) {
     push("analisis", "Falta el análisis / diagnóstico. Complételo antes de guardar.", "6.1.4 / 6.2.4");
   }
-  if (estaVacio(soap.plan_tratamiento)) {
-    push("plan_tratamiento", "Falta el plan de tratamiento. Complételo antes de guardar.", "6.1.6 / 6.2.6");
+  if (estaVacio(soap.plan) && estaVacio(soap.plan_tratamiento)) {
+    push("plan", "Falta el plan de tratamiento. Complételo antes de guardar.", "6.1.6 / 6.2.6");
   }
   if (estaVacio(soap.diagnostico_cie10) || !/^[A-TV-Z][0-9]{2}/i.test(soap.diagnostico_cie10)) {
     push("diagnostico_cie10", "Falta un código CIE-10 válido. Indíquelo para cerrar la nota.", "6.1.4");
@@ -171,34 +192,30 @@ export function exigirSoapClinico(soap: SoapClinico, nota?: NotaClinica): void {
 }
 
 export function aplicarSoapANota(nota: NotaClinica, soap: SoapClinico): NotaClinica {
-  const subjetivo = depurarTextoClinico(soap.subjetivo);
-  const objetivo = depurarTextoClinico(soap.objetivo);
-  const analisis = depurarTextoClinico(soap.analisis);
-  const plan = depurarTextoClinico(soap.plan_tratamiento);
-  const motivo = subjetivo.split(/[.!?]/)[0]?.trim().slice(0, 220) || "";
-  const diagnostico = soap.diagnostico_cie10 && analisis
-    ? analisis.includes(soap.diagnostico_cie10)
-      ? analisis
-      : `${analisis} (CIE-10: ${soap.diagnostico_cie10})`
-    : analisis;
+  const motivo = asText(soap.motivo_consulta);
+  const padecimiento = asText(soap.padecimiento_actual);
+  const subjetivo = asText(soap.subjetivo) || padecimiento;
+  const objetivo = asText(soap.objetivo);
+  const analisis = asText(soap.analisis);
+  const plan = asText(soap.plan) || asText(soap.plan_tratamiento);
   const medsTexto = soap.medicamentos
     .map((row) => [row.medicamento, row.dosis, row.via, row.periodicidad].filter(Boolean).join(" "))
     .join("\n");
   return {
     ...nota,
+    motivo_consulta: motivo,
+    padecimiento_actual: padecimiento,
     subjetivo,
     objetivo,
     analisis,
-    motivo_consulta: motivo,
-    padecimiento_actual: subjetivo,
     exploracion_fisica: objetivo,
-    diagnostico,
-    diagnostico_cie10: analisis ? soap.diagnostico_cie10 : "",
+    diagnostico: analisis,
+    diagnostico_cie10: analisis ? asText(soap.diagnostico_cie10) : "",
     plan,
-    pronostico: depurarTextoClinico(soap.pronostico),
+    pronostico: asText(soap.pronostico),
     tratamiento: soap.medicamentos.length ? soap.medicamentos : [],
     medicamentos: medsTexto,
-    resumen: [motivo, diagnostico, plan].filter(Boolean).join(". "),
+    resumen: [motivo, analisis, plan].filter(Boolean).join(". "),
   };
 }
 
@@ -207,30 +224,28 @@ export async function sintetizarSoapClinico(env: Env, transcripcion: string): Pr
   if (!clipped) {
     throw new AppError(400, "La transcripción no puede estar vacía.", "TRANSCRIPT_EMPTY");
   }
+  if (esRuidoNoClinico(clipped)) {
+    return parseSoapClinico({});
+  }
   const raw = await groqChatJson(env, [
     { role: "system", content: SOAP_SYSTEM_PROMPT },
     {
       role: "user",
-      content: `Devuelve SOLO JSON con: subjetivo, objetivo, analisis, plan_tratamiento, medicamentos, diagnostico_cie10, pronostico.
-medicamentos: array de {medicamento, dosis, via, periodicidad}. Si no hay fármacos, [].
-diagnostico_cie10: código CIE-10 únicamente si hay diagnóstico clínico en el dictado; si no, "".
-Si el dictado es solo un saludo, charla o prueba de audio, TODOS los campos de texto van "" y medicamentos [].
-Si el dictado SÍ tiene dato clínico (dolor, fiebre, síntomas, exploración, plan), llénalo en el campo correcto. Ejemplo de forma: subjetivo/motivo puede ser "Dolor de garganta y fiebre" cuando eso se dictó.
-No inventes. No uses saludos como motivo.
+      content: `Redacta la nota SOAP a partir de este dictado. JSON plano con strings: motivo_consulta, padecimiento_actual, subjetivo, objetivo, analisis, plan.
 
-TRANSCRIPCIÓN:
+DICTADO:
 ${clipped}`,
     },
   ]);
-  console.log("GROQ OBJETO SOAP CRUDO:", JSON.stringify(raw));
+  console.log("GROQ RAW ANTES DE PARSEAR SOAP:", JSON.stringify(raw));
   const soap = parseSoapClinico(raw);
-  soap.subjetivo = textoCampoClinico(soap.subjetivo);
-  soap.objetivo = textoCampoClinico(soap.objetivo);
-  soap.analisis = textoCampoClinico(soap.analisis);
-  soap.plan_tratamiento = textoCampoClinico(soap.plan_tratamiento);
-  if (!soap.subjetivo && !esRuidoNoClinico(clipped)) {
-    soap.subjetivo = depurarTextoClinico(clipped) || clipped;
-  }
-  console.log("SOAP TRAS PARSEAR:", JSON.stringify(soap));
+  console.log("SOAP CONTRATO:", JSON.stringify({
+    motivo_consulta: soap.motivo_consulta,
+    padecimiento_actual: soap.padecimiento_actual,
+    subjetivo: soap.subjetivo,
+    objetivo: soap.objetivo,
+    analisis: soap.analisis,
+    plan: soap.plan,
+  }));
   return soap;
 }

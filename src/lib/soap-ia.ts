@@ -54,7 +54,7 @@ const TOKEN_RUIDO = new Set([
 ]);
 
 const CLINICO =
-  /\b(dolor|duele|fiebre|tos|nause|nauseas|vómit|vomit|mareo|cefalea|diarrea|alerg|asma|hipertens|diabetes|presi[oó]n|glucosa|temperatura|exploraci[oó]n|abdomen|pulm[oó]n|coraz[oó]n|diagn[oó]stic|tratamiento|medicament|recet|s[ií]ntoma|padecimiento|consulta por|acude por|viene por|antecedente|cirug[ií]a|herida|infecci[oó]n|sangrado|disnea|taquicard|edema|lesi[oó]n|fractura|embarazo|gesta|motivo)\b/i;
+  /\b(dolor|duele|fiebre|calentura|tos|nause|nauseas|v[oó]mit|mareo|cefalea|diarrea|alerg|asma|hipertens|diabetes|presi[oó]n|glucosa|temperatura|exploraci[oó]n|abdomen|pulm[oó]n|coraz[oó]n|diagn[oó]stic|tratamiento|medicament|recet|s[ií]ntoma|padecimiento|consulta por|acude por|viene por|antecedente|cirug[ií]a|herida|infecci[oó]n|sangrado|disnea|taquicard|edema|lesi[oó]n|fractura|embarazo|gesta|motivo|garganta|odinofagia|faring|otalgia|o[ií]do|arde|irritad|tapado)\b/i;
 
 function normalizarRuido(texto: string): string {
   return texto
@@ -224,6 +224,13 @@ ${clipped}`,
   ]);
   console.log("GROQ OBJETO SOAP CRUDO:", JSON.stringify(raw));
   const soap = parseSoapClinico(raw);
+  soap.subjetivo = textoCampoClinico(soap.subjetivo);
+  soap.objetivo = textoCampoClinico(soap.objetivo);
+  soap.analisis = textoCampoClinico(soap.analisis);
+  soap.plan_tratamiento = textoCampoClinico(soap.plan_tratamiento);
+  if (!soap.subjetivo && !esRuidoNoClinico(clipped)) {
+    soap.subjetivo = depurarTextoClinico(clipped) || clipped;
+  }
   console.log("SOAP TRAS PARSEAR:", JSON.stringify(soap));
   return soap;
 }

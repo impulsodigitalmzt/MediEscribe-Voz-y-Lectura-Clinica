@@ -174,9 +174,32 @@ export function notaClinicaVacia(): NotaClinica {
   };
 }
 
-/**
- * Normaliza el JSON del Worker a las llaves del editor SOAP.
- */
+export function soapDesdeBorrador(borrador: unknown): {
+  motivo_consulta: string;
+  padecimiento_actual: string;
+  subjetivo: string;
+} {
+  const original = asTexto(borrador);
+  if (!original) return { motivo_consulta: '', padecimiento_actual: '', subjetivo: '' };
+  const saludo =
+    /^(?:hola|buenos?\s*d[ií]as?|buenas\s*(?:tardes|noches)|d[ií]game(?:\s+en\s+qu[eé]\s+puedo\s+servirle)?|s[ií]\s+doctor|pues\s+mira)[\s,.;:]*/i;
+  let limpio = original;
+  for (let i = 0; i < 8 && saludo.test(limpio); i += 1) {
+    limpio = limpio.replace(saludo, '').trim();
+  }
+  if (!limpio) limpio = original;
+  const motivo = (limpio.split(/[.!?]/)[0] || limpio).trim().slice(0, 220);
+  return {
+    motivo_consulta: motivo,
+    padecimiento_actual: limpio,
+    subjetivo: limpio,
+  };
+}
+
+export function transcripcionPlana(value: unknown): string {
+  return asTexto(value);
+}
+
 export function extraerSoapDesdeRespuesta(
   result: {
     nota?: Partial<NotaClinica> | Record<string, unknown> | null;
@@ -214,15 +237,12 @@ export function extraerSoapDesdeRespuesta(
     asTexto(soap.plan) ||
     asTexto(soap.plan_tratamiento);
 
-  const clinicoBorrador = asTexto(borrador).replace(
-    /^(?:hola|buenos?\s*d[ií]as?|buenas\s*(?:tardes|noches)|s[ií]\s+doctor)[\s,.;:]*/i,
-    '',
-  ).trim();
+  const clinico = soapDesdeBorrador(borrador);
 
   return {
-    motivo_consulta: motivo || (clinicoBorrador ? clinicoBorrador.split(/[.!?]/)[0]?.slice(0, 220) || clinicoBorrador : ''),
-    padecimiento_actual: padecimiento || clinicoBorrador,
-    subjetivo: padecimiento || clinicoBorrador,
+    motivo_consulta: motivo || clinico.motivo_consulta,
+    padecimiento_actual: padecimiento || clinico.padecimiento_actual,
+    subjetivo: padecimiento || clinico.subjetivo,
     objetivo,
     exploracion_fisica: objetivo,
     analisis,
@@ -245,25 +265,27 @@ export function mapearNotaDesdeIA(
   const raw = aplanarSoap(incoming as Record<string, unknown>);
   const mapped: NotaClinica = {
     ...base,
-    ...(incoming as Partial<NotaClinica>),
     signos_vitales: parseSignos(raw, base.signos_vitales ?? vacioSignosVitales()),
     solicitudes_estudio: parseSolicitudes(raw, base.solicitudes_estudio ?? []),
   };
 
-  mapped.motivo_consulta = asTexto(raw.motivo_consulta) || mapped.motivo_consulta;
-  mapped.padecimiento_actual = asTexto(raw.padecimiento_actual) || mapped.padecimiento_actual;
-  mapped.interrogatorio = asTexto(raw.interrogatorio) || mapped.interrogatorio;
-  mapped.exploracion_fisica = asTexto(raw.exploracion_fisica) || mapped.exploracion_fisica;
+  mapped.motivo_consulta = asTexto(raw.motivo_consulta) || asTexto(raw.subjetivo) || base.motivo_consulta;
+  mapped.padecimiento_actual = asTexto(raw.padecimiento_actual) || asTexto(raw.subjetivo) || base.padecimiento_actual;
+  mapped.interrogatorio = asTexto(raw.interrogatorio) || base.interrogatorio;
+  mapped.exploracion_fisica = asTexto(raw.exploracion_fisica) || asTexto(raw.objetivo) || base.exploracion_fisica;
   const dx = diagnosticoConCie10(raw);
-  mapped.diagnostico = dx.diagnostico || mapped.diagnostico;
-  mapped.diagnostico_cie10 = dx.cie10 || mapped.diagnostico_cie10;
-  mapped.plan = asTexto(raw.plan_tratamiento) || asTexto(raw.plan) || mapped.plan;
-  mapped.medicamentos = asTexto(raw.medicamentos) || mapped.medicamentos;
-  mapped.pronostico = asTexto(raw.pronostico) || asTexto(raw.pronóstico) || mapped.pronostico;
-  mapped.subjetivo = asTexto(raw.subjetivo) || mapped.padecimiento_actual || mapped.subjetivo;
-  mapped.objetivo = asTexto(raw.objetivo) || mapped.exploracion_fisica || mapped.objetivo;
-  mapped.analisis = asTexto(raw.analisis) || mapped.diagnostico || mapped.analisis;
-  mapped.estudios = asTexto(raw.estudios) || mapped.solicitudes_estudio.join('; ') || mapped.estudios;
+  mapped.diagnostico = dx.diagnostico || base.diagnostico;
+  mapped.diagnostico_cie10 = dx.cie10 || base.diagnostico_cie10;
+  mapped.plan = asTexto(raw.plan_tratamiento) || asTexto(raw.plan) || base.plan;
+  mapped.medicamentos = asTexto(raw.medicamentos) || base.medicamentos;
+  mapped.pronostico = asTexto(raw.pronostico) || asTexto(raw.pronóstico) || base.pronostico;
+  mapped.subjetivo = asTexto(raw.subjetivo) || mapped.padecimiento_actual || base.subjetivo;
+  mapped.objetivo = asTexto(raw.objetivo) || mapped.exploracion_fisica || base.objetivo;
+  mapped.analisis = asTexto(raw.analisis) || mapped.diagnostico || base.analisis;
+  mapped.estudios = asTexto(raw.estudios) || mapped.solicitudes_estudio.join('; ') || base.estudios;
+  if (Array.isArray((incoming as NotaClinica).tratamiento)) {
+    mapped.tratamiento = (incoming as NotaClinica).tratamiento;
+  }
   if (!mapped.signos_vitales) mapped.signos_vitales = vacioSignosVitales();
   if (!Array.isArray(mapped.solicitudes_estudio)) mapped.solicitudes_estudio = [];
   if (!mapped.diagnostico_cie10) mapped.diagnostico_cie10 = '';

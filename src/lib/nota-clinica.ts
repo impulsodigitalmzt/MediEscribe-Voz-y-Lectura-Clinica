@@ -323,7 +323,8 @@ export async function redactarNotaClinica(
     pacienteConocido && pacienteConocido !== "Paciente sin identificar" ? pacienteConocido : "";
   const idiomaHint = normalizeLanguageCode(idiomaWhisper) || detectarIdiomaTexto(clipped);
   const soap = await sintetizarSoapClinico(env, clipped);
-  if (!esRuidoNoClinico(clipped) && !soap.subjetivo) {
+  soap.subjetivo = textoCampoClinico(soap.subjetivo);
+  if (!soap.subjetivo && !esRuidoNoClinico(clipped)) {
     soap.subjetivo = clipped;
   }
   const base = normalizeNota(

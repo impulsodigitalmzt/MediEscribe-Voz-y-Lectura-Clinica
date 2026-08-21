@@ -95,7 +95,7 @@ export default function NoteEditor({
 
   return (
     <div className="space-y-4">
-      <nav className="no-print flex flex-wrap gap-2 text-[11px] sticky top-14 z-[5] bg-slate-50/95 backdrop-blur py-2">
+      <nav className="no-print flex flex-wrap gap-2 text-[11px] sticky top-14 z-[1] bg-slate-50/95 backdrop-blur py-2">
         {[
           ['#soap-s', 'S Subjetivo'],
           ['#soap-o', 'O Objetivo'],

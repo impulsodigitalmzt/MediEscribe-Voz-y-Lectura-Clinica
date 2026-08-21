@@ -1,5 +1,5 @@
 import { FileText, Loader2, Mic, Shield, Square, Upload } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type MouseEvent } from 'react';
 import { useSpeechDictation } from '../../hooks/useSpeechDictation';
 
 type Props = {
@@ -70,21 +70,29 @@ export default function VoiceDictationPanel({
     void handleStart();
   };
 
-  const handleGenerarTexto = async () => {
-    const texto = textoCaja.trim();
+  const handleGenerarSoap = (event?: MouseEvent<HTMLButtonElement>) => {
+    event?.preventDefault();
+    event?.stopPropagation();
+    const texto = (textoCaja || dictadoRef.current || '').trim();
     console.log('Iniciando generación SOAP para texto:', texto);
     if (!texto) {
       console.warn('[SOAP] El clic sí se registró, pero el borrador está vacío. No hay fetch.');
+      onGenerateText(texto);
+      return;
     }
     if (capturing) {
-      await handleStopAndProcess();
+      void handleStopAndProcess();
       return;
     }
     onGenerateText(texto);
   };
 
+  useEffect(() => {
+    console.info('[SOAP] Botón "Generar SOAP desde texto" montado (id=btn-generar-soap-texto).');
+  }, []);
+
   return (
-    <section className="card p-4 sm:p-5 space-y-3 no-print">
+    <section className="card p-4 sm:p-5 space-y-3 no-print relative z-20">
       <div className="flex items-start justify-between gap-3">
         <div>
           <h2 className="text-sm font-semibold text-slate-800">Copiloto de dictado</h2>
@@ -158,11 +166,12 @@ export default function VoiceDictationPanel({
         </button>
         <button
           type="button"
-          className="btn-primary py-2.5 px-5 text-sm font-semibold"
-          disabled={generating}
-          onClick={() => void handleGenerarTexto()}
+          id="btn-generar-soap-texto"
+          className="btn-primary py-2.5 px-5 text-sm font-semibold relative z-20"
+          aria-busy={generating}
+          onClick={handleGenerarSoap}
         >
-          {generating ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileText className="w-4 h-4" />}
+          {generating ? <Loader2 className="w-4 h-4 animate-spin pointer-events-none" /> : <FileText className="w-4 h-4 pointer-events-none" />}
           {generating ? 'Sintetizando nota…' : 'Generar SOAP desde texto'}
         </button>
       </div>

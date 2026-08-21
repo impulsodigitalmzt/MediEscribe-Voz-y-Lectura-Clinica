@@ -136,14 +136,17 @@ function esCopiaDeTranscripcion(campo: string, transcripcion: string): boolean {
 
 function sanitizarNotaContraTranscripcion(nota: NotaClinica, transcripcion: string): NotaClinica {
   const next = { ...nota };
+  const transcripcionEsRuido = esRuidoNoClinico(transcripcion);
   for (const key of CAMPOS_NARRATIVOS) {
-    if (esCopiaDeTranscripcion(next[key], transcripcion) || esRuidoNoClinico(next[key])) {
+    if (esRuidoNoClinico(next[key])) {
       next[key] = "";
-    } else {
-      next[key] = depurarTextoClinico(next[key]);
+      continue;
+    }
+    if (transcripcionEsRuido && esCopiaDeTranscripcion(next[key], transcripcion)) {
+      next[key] = "";
     }
   }
-  if (!next.resumen || next.resumen === NO_MENCIONADO || esCopiaDeTranscripcion(next.resumen, transcripcion) || esRuidoNoClinico(next.resumen)) {
+  if (!next.resumen || next.resumen === NO_MENCIONADO || esRuidoNoClinico(next.resumen) || (transcripcionEsRuido && esCopiaDeTranscripcion(next.resumen, transcripcion))) {
     next.resumen = buildResumen(next);
   }
   next.secciones_faltantes = TEXT_KEYS.filter((key) => !next[key] || next[key] === NO_MENCIONADO);
@@ -319,6 +322,9 @@ export async function redactarNotaClinica(
     pacienteConocido && pacienteConocido !== "Paciente sin identificar" ? pacienteConocido : "";
   const idiomaHint = normalizeLanguageCode(idiomaWhisper) || detectarIdiomaTexto(clipped);
   const soap = await sintetizarSoapClinico(env, clipped);
+  if (!esRuidoNoClinico(clipped) && !soap.subjetivo) {
+    soap.subjetivo = clipped;
+  }
   const base = normalizeNota(
     {
       subjetivo: soap.subjetivo,
@@ -344,6 +350,8 @@ export async function redactarNotaClinica(
     especialidad,
     transcriptChars: clipped.length,
     soapKeys: ["subjetivo", "objetivo", "analisis", "plan_tratamiento", "medicamentos", "diagnostico_cie10", "pronostico"],
+    motivoChars: nota.motivo_consulta?.length ?? 0,
+    padecimientoChars: nota.padecimiento_actual?.length ?? 0,
     tieneCie10: Boolean(nota.diagnostico_cie10),
     recetas: nota.tratamiento.length,
   });

@@ -139,6 +139,18 @@ consultaRoutes.post("/texto", async (c) => {
       consultaId = (body.consulta_id ?? "").trim();
     }
 
+    if (!c.env.GROQ_API_KEY) {
+      return c.json(
+        {
+          ok: false,
+          error: "GROQ_API_KEY no está configurada en el Worker.",
+          detail: "GROQ_API_KEY no está configurada en el Worker. Sin esta clave no hay llamada al modelo.",
+          code: "GROQ_NOT_CONFIGURED",
+        },
+        500
+      );
+    }
+
     logSinPhi("consulta_texto_start", {
       hasGroqApiKey: Boolean(c.env.GROQ_API_KEY),
       groqModel: c.env.GROQ_MODEL || "llama-3.3-70b-versatile",
@@ -437,8 +449,9 @@ function consultaError(c: Context<{ Bindings: Env; Variables: { auth: AuthContex
     return c.json(
       {
         ok: false,
-        code: error.code,
+        error: error.message,
         detail: error.message,
+        code: error.code,
         norma: NORMA_EXPEDIENTE,
         faltantes: error.faltantes,
         guia: error.guia,
@@ -448,7 +461,10 @@ function consultaError(c: Context<{ Bindings: Env; Variables: { auth: AuthContex
     );
   }
   if (isAppError(error)) {
-    return c.json({ ok: false, detail: error.message, code: error.code }, error.status);
+    return c.json(
+      { ok: false, error: error.message, detail: error.message, code: error.code },
+      error.status
+    );
   }
   console.error(
     JSON.stringify({
@@ -457,5 +473,6 @@ function consultaError(c: Context<{ Bindings: Env; Variables: { auth: AuthContex
       message: error instanceof Error ? error.message : "unknown",
     })
   );
-  return c.json({ ok: false, detail: "No se pudo procesar la consulta médica." }, 500);
+  const message = error instanceof Error ? error.message : "No se pudo procesar la consulta médica.";
+  return c.json({ ok: false, error: message, detail: message }, 500);
 }

@@ -37,17 +37,18 @@ export class ConsultaValidacionError extends Error {
 }
 
 function throwConsultaFailure(
-  data: { detail?: string; code?: string; guia?: string[]; nota?: NotaClinica; faltantes?: Array<{ mensaje: string }> },
+  data: { detail?: string; error?: string; code?: string; guia?: string[]; nota?: NotaClinica; faltantes?: Array<{ mensaje: string }> },
   fallback: string,
 ): never {
+  const message = data.detail || data.error || fallback;
   if (data.code === 'NOM004_INCOMPLETA' || data.guia?.length || data.faltantes?.length) {
     throw new ConsultaValidacionError(
-      data.detail || fallback,
+      message,
       data.guia?.length ? data.guia : (data.faltantes ?? []).map((item) => item.mensaje),
       data.nota,
     );
   }
-  throw new Error(data.detail || fallback);
+  throw new Error(message);
 }
 
 export function apiErrorMessage(err: unknown, fallback: string): string {
@@ -369,12 +370,14 @@ class ApiService {
     especialidad = 'medicina_general',
     extras: { medicoNombre?: string; medicoCedula?: string; consultaId?: string } = {}
   ): Promise<ConsultaProcessResponse> {
+    const textoBorrador = transcripcion;
+    console.log('Enviando a IA:', textoBorrador);
     const token = this.getAccessToken();
     const response = await fetch(`${API_BASE}/api/consultas-medicas/texto`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Accept: 'text/event-stream, application/json',
+        Accept: 'application/json',
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
       body: JSON.stringify({
@@ -387,7 +390,9 @@ class ApiService {
       }),
       signal: AbortSignal.timeout(90_000),
     });
-    return readConsultaIa(response, 'No se pudo procesar la consulta médica.');
+    const respuesta = await readConsultaIa(response, 'No se pudo procesar la consulta médica.');
+    console.log('Respuesta de IA recibida:', respuesta);
+    return respuesta;
   }
 
   async getConsulta(id: string): Promise<ConsultaMedica> {

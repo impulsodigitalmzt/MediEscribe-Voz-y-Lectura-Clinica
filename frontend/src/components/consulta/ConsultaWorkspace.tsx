@@ -164,10 +164,11 @@ export default function ConsultaWorkspace() {
       setError('No hay una consulta abierta.');
       return;
     }
-    if (texto.length < 12) {
-      setError('Dicte o pegue el contenido de la consulta en la caja de transcripción y vuelva a generar.');
+    if (!texto) {
+      setError('Dicte o pegue el contenido de la consulta en el borrador y vuelva a generar.');
       return;
     }
+    console.log('Enviando a IA:', texto);
     setDictado(texto);
     setGenerating(true);
     setError('');
@@ -190,6 +191,7 @@ export default function ConsultaWorkspace() {
         setNota((n) => ({ ...n, fecha: stamp.fecha, hora: stamp.hora }));
       }
       const result = await api.procesarConsultaTexto(texto, pid, especialidad, extras);
+      console.log('Respuesta de IA recibida:', result);
       if (result.consulta) hydrate(result.consulta);
       if (result.transcripcion?.trim()) setDictado(result.transcripcion);
       aplicarNotaGenerada(result.nota ?? result.consulta?.nota_estructurada ?? undefined, stamp.fecha, stamp.hora);

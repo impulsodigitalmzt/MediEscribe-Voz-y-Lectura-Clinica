@@ -21,9 +21,10 @@ ASIGNACIÓN SEMÁNTICA:
 - pronostico: solo si el médico lo dictó. Si no, "".
 
 CAMPOS VACÍOS POR DEFECTO:
-- Si una sección no tiene información médica verídica y pertinente, el valor DEBE ser "" (cadena vacía) o [] en medicamentos.
-- Prohibido inventar, usar saludos como motivo de consulta, o rellenar con frases genéricas («paciente en consulta», «sin datos», «estable», «se recomienda valoración»).
-- No copies la transcripción cruda.
+- Solo si el dictado es saludo, prueba de micrófono o charla sin dato médico, todos los campos van "".
+- Si hay información clínica (síntomas, exploración, diagnóstico, plan), LLENA el campo correspondiente con ese contenido médico. No lo dejes vacío.
+- Prohibido inventar datos que no estén en el dictado, usar saludos como motivo, o rellenar con frases genéricas.
+- No copies saludos. Sí puedes usar el texto clínico del dictado en el campo que le corresponda.
 
 Responde SOLO un objeto JSON con esas llaves.`;
 
@@ -213,7 +214,8 @@ export async function sintetizarSoapClinico(env: Env, transcripcion: string): Pr
 medicamentos: array de {medicamento, dosis, via, periodicidad}. Si no hay fármacos, [].
 diagnostico_cie10: código CIE-10 únicamente si hay diagnóstico clínico en el dictado; si no, "".
 Si el dictado es solo un saludo, charla o prueba de audio, TODOS los campos de texto van "" y medicamentos [].
-No copies la transcripción. No inventes.
+Si el dictado SÍ tiene dato clínico (dolor, fiebre, síntomas, exploración, plan), llénalo en el campo correcto. Ejemplo de forma: subjetivo/motivo puede ser "Dolor de garganta y fiebre" cuando eso se dictó.
+No inventes. No uses saludos como motivo.
 
 TRANSCRIPCIÓN:
 ${clipped}`,

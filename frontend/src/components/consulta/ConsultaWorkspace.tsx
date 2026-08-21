@@ -79,6 +79,9 @@ export default function ConsultaWorkspace() {
     });
     setGuardia(row.guardia_legal);
     setAclaraciones(row.aclaraciones ?? []);
+    if (typeof row.transcripcion === 'string' && row.transcripcion.trim()) {
+      setDictado(row.transcripcion);
+    }
   };
 
   useEffect(() => {
@@ -188,10 +191,11 @@ export default function ConsultaWorkspace() {
       }
       const result = await api.procesarConsultaTexto(texto, pid, especialidad, extras);
       if (result.consulta) hydrate(result.consulta);
+      if (result.transcripcion?.trim()) setDictado(result.transcripcion);
       aplicarNotaGenerada(result.nota ?? result.consulta?.nota_estructurada ?? undefined, stamp.fecha, stamp.hora);
       if (result.receta) setReceta({ ...EMPTY_RECETA, ...result.receta, medicamentos: result.receta.medicamentos ?? [] });
       setGuardia(result.guardia_legal);
-      setSavedMsg('Nota SOAP sintetizada (NOM-004). Revise S-O-A-P y guarde. El dictado crudo no se muestra.');
+      setSavedMsg('Nota SOAP sintetizada (NOM-004). El borrador de dictado se conserva; revise S-O-A-P y guarde.');
     } catch (err) {
       if (err instanceof ConsultaValidacionError) {
         if (err.nota) aplicarNotaGenerada(err.nota, nota.fecha, nota.hora);
@@ -245,10 +249,11 @@ export default function ConsultaWorkspace() {
       }
       const result = await api.procesarConsultaAudio(audio, pid, especialidad, extras);
       if (result.consulta) hydrate(result.consulta);
+      if (result.transcripcion?.trim()) setDictado(result.transcripcion);
       aplicarNotaGenerada(result.nota ?? result.consulta?.nota_estructurada ?? undefined, stamp.fecha, stamp.hora);
       if (result.receta) setReceta({ ...EMPTY_RECETA, ...result.receta, medicamentos: result.receta.medicamentos ?? [] });
       setGuardia(result.guardia_legal);
-      setSavedMsg('Audio enviado al Worker (Whisper → SOAP). Revise CIE-10 y receta, luego guarde.');
+      setSavedMsg('Audio enviado al Worker (Whisper → SOAP). El borrador muestra la transcripción; revise CIE-10 y receta, luego guarde.');
     } catch (err) {
       if (err instanceof ConsultaValidacionError) {
         if (err.nota) aplicarNotaGenerada(err.nota, nota.fecha, nota.hora);

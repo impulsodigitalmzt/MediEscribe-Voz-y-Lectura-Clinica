@@ -3,7 +3,6 @@ import { AppError } from "./errors";
 import { transcribeAudio } from "./groq";
 import { ensureExpedienteSchema } from "./expediente-schema";
 import { aplicarIdentidadPaciente, aplicarSelloLegal, notaDesdeExpediente, recetaDesdeNota, redactarNotaClinica, type DatosMedico, type NotaClinica, type RecetaPaciente } from "./nota-clinica";
-import { exigirSoapClinico, parseSoapClinico } from "./soap-ia";
 import {
   consultaInmutable,
   ESTADO_BORRADOR,
@@ -25,7 +24,7 @@ import {
 import type { NotaAclaracionPublica } from "./aclaraciones";
 import { denegarSiAjeno, esRolPrivilegiado, type SesionMedico } from "./acceso-expediente";
 import { exigirConsentimientoConsulta } from "./consentimiento";
-import { cifrarPhi } from "./phi";
+import { cifrarPhi, descifrarPhi } from "./phi";
 
 export type ConsultaMedicaRow = {
   id: string;
@@ -136,11 +135,14 @@ export async function ensureConsultasSchema(sql: Sql): Promise<void> {
 export async function publicConsulta(
   row: ConsultaMedicaRow,
   paciente?: PacientePublico,
-  _phiSecret?: string
+  phiSecret?: string
 ): Promise<ConsultaPublica> {
   const nota = parseNota(row.nota_estructurada);
   const fechaHora = row.fecha_hora instanceof Date ? row.fecha_hora.toISOString() : String(row.fecha_hora);
   const pacienteNombre = paciente?.nombre_completo || row.paciente_nombre || nota?.nombre_paciente || "";
+  const transcripcion = phiSecret
+    ? await descifrarPhi(phiSecret, row.transcripcion)
+    : row.transcripcion;
   return {
     id: String(row.id),
     paciente_id: String(row.paciente_id),
@@ -149,7 +151,7 @@ export async function publicConsulta(
     paciente_nombre: pacienteNombre,
     paciente,
     resumen: row.resumen,
-    transcripcion: null,
+    transcripcion: transcripcion || null,
     nota_estructurada: nota,
     motivo_consulta: row.motivo_consulta,
     exploracion_fisica: row.exploracion_fisica,
@@ -519,18 +521,6 @@ export async function procesarConsultaDesdeTexto(
   const nota = notaExpedienteLegal(documentacion.nota, paciente, input.datosMedico ?? {});
   const receta = documentacion.receta;
   const idioma = documentacion.idioma_detectado || input.idiomaDetectado || "es";
-  exigirSoapClinico(
-    parseSoapClinico({
-      subjetivo: nota.subjetivo || nota.padecimiento_actual,
-      objetivo: nota.objetivo || nota.exploracion_fisica,
-      analisis: nota.analisis || nota.diagnostico,
-      plan_tratamiento: nota.plan,
-      medicamentos: nota.tratamiento,
-      diagnostico_cie10: nota.diagnostico_cie10,
-      pronostico: nota.pronostico,
-    }),
-    nota
-  );
 
   const row = await withSql(env, ctx, async (sql) => {
     if (input.consultaId) {
@@ -564,7 +554,7 @@ export async function procesarConsultaDesdeTexto(
     });
   });
 
-  return { transcripcion: "", nota, receta, row, paciente, guardia_legal: validarNotaNom004(nota) };
+  return { transcripcion, nota, receta, row, paciente, guardia_legal: validarNotaNom004(nota) };
 }
 
 export async function guardarDocumentacionConsulta(

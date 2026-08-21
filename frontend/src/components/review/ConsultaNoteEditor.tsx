@@ -85,6 +85,9 @@ export default function ConsultaNoteEditor() {
     setGuardia(row.guardia_legal);
     setHistorial((prev) => row.historial ?? prev);
     setAclaraciones(row.aclaraciones ?? []);
+    if (typeof row.transcripcion === 'string' && row.transcripcion.trim()) {
+      setDictado(row.transcripcion);
+    }
   };
 
   useEffect(() => {
@@ -128,10 +131,11 @@ export default function ConsultaNoteEditor() {
     try {
       const result = await api.procesarConsultaTexto(dictado, pacienteId, consulta?.especialidad || 'medicina_general', extras);
       hydrate(result.consulta);
+      if (result.transcripcion?.trim()) setDictado(result.transcripcion);
       if (result.nota) setNota({ ...EMPTY_NOTA, ...result.nota });
       if (result.receta) setReceta({ ...EMPTY_RECETA, ...result.receta, medicamentos: result.receta.medicamentos ?? [] });
       setGuardia(result.guardia_legal);
-      setSavedMsg('Nota SOAP sintetizada. El dictado crudo no se muestra. Revise y guarde.');
+      setSavedMsg('Nota SOAP sintetizada. El borrador de dictado se conserva. Revise y guarde.');
     } catch (err) {
       if (err instanceof ConsultaValidacionError) {
         if (err.nota) setNota({ ...EMPTY_NOTA, ...err.nota });
@@ -151,10 +155,11 @@ export default function ConsultaNoteEditor() {
     try {
       const result = await api.procesarConsultaAudio(audioFile, pacienteId, consulta?.especialidad || 'medicina_general', extras);
       hydrate(result.consulta);
+      if (result.transcripcion?.trim()) setDictado(result.transcripcion);
       if (result.nota) setNota({ ...EMPTY_NOTA, ...result.nota });
       if (result.receta) setReceta({ ...EMPTY_RECETA, ...result.receta, medicamentos: result.receta.medicamentos ?? [] });
       setGuardia(result.guardia_legal);
-      setSavedMsg('Audio enviado al Worker (Whisper → SOAP). El dictado crudo no se muestra. Revise y guarde.');
+      setSavedMsg('Audio enviado al Worker (Whisper → SOAP). El borrador muestra la transcripción. Revise y guarde.');
     } catch (err) {
       if (err instanceof ConsultaValidacionError) {
         if (err.nota) setNota({ ...EMPTY_NOTA, ...err.nota });

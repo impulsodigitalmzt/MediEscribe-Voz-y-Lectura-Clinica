@@ -52,9 +52,9 @@ export default function ConsentimientoInformado({
       </h2>
       <p className="text-xs text-slate-600 leading-relaxed">
         Los datos de salud son sensibles (LFPDPPP). Solo se solicita lo necesario para esta consulta.
-        El dictado crudo se minimiza en pantalla y se cifra en reposo. Si se genera nota con IA, el texto
-        se envía a Groq solo para inferencia, sin almacenamiento ni entrenamiento de modelos públicos.
-        El responsable del tratamiento es el médico autenticado.
+        El dictado aparece en el borrador de la consulta para control del médico y se cifra en reposo.
+        Si se genera nota con IA, el texto se envía a Groq solo para inferencia, sin almacenamiento ni entrenamiento
+        de modelos públicos. El responsable del tratamiento es el médico autenticado.
       </p>
       <label className="block text-xs font-medium text-slate-700">
         Nombre del paciente o representante legal

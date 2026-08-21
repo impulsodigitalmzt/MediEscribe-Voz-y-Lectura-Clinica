@@ -19,7 +19,6 @@ export default function VoiceDictationPanel({
   const dictadoRef = useRef(dictado);
   dictadoRef.current = dictado;
   const [showWaves, setShowWaves] = useState(false);
-  const [mostrarDictado, setMostrarDictado] = useState(false);
   const { listening, interim, supported, start, stop } = useSpeechDictation((chunk) => {
     const current = dictadoRef.current;
     onDictado(current ? `${current.trim()} ${chunk}` : chunk);
@@ -85,8 +84,7 @@ export default function VoiceDictationPanel({
         <div>
           <h2 className="text-sm font-semibold text-slate-800">Copiloto de dictado</h2>
           <p className="text-sm text-slate-600">
-            El audio se captura en segundo plano y se envía al Worker para Whisper y SOAP.
-            El texto crudo no se muestra en la nota.
+            El borrador muestra en vivo lo que capta el micrófono. La IA solo pasa a SOAP lo que sea clínicamente pertinente.
           </p>
         </div>
         <span className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-teal-800 bg-teal-50 border border-teal-200 rounded-full px-2 py-1">
@@ -136,21 +134,18 @@ export default function VoiceDictationPanel({
         </p>
       ) : null}
 
-      <details
-        className="rounded-xl border border-slate-200 bg-slate-50 p-3"
-        open={mostrarDictado}
-        onToggle={(e) => setMostrarDictado((e.target as HTMLDetailsElement).open)}
-      >
-        <summary className="text-xs font-semibold text-slate-600 cursor-pointer">
-          Pegar texto (opcional · no se muestra en el SOAP)
-        </summary>
+      <label className="block space-y-1.5">
+        <span className="text-xs font-semibold uppercase tracking-wider text-slate-600">
+          Borrador / transcripción
+        </span>
         <textarea
           value={textoCaja}
           onChange={(e) => onDictado(e.target.value)}
-          placeholder="Solo si necesita pegar una transcripción. El dictado por voz usa el audio completo."
-          className="mt-2 w-full min-h-[96px] p-3 rounded-lg border border-slate-200 text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-teal-500 bg-white"
+          placeholder="Lo que dicte o escriba aparece aquí. Puede editarlo antes de generar el SOAP."
+          className="w-full min-h-[140px] p-3 rounded-lg border border-slate-200 text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-teal-500 bg-white"
+          aria-label="Borrador de transcripción"
         />
-      </details>
+      </label>
       <div className="flex flex-wrap gap-2 items-center">
         <button type="button" className="btn-secondary py-2 px-4 text-sm" disabled={!audioFile || generating} onClick={() => onGenerateAudio()}>
           {generating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Mic className="w-3.5 h-3.5" />}

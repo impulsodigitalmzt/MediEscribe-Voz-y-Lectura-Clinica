@@ -103,36 +103,25 @@
            bg-amber-50 border border-amber-200 text-amber-800 text-sm;
   }
 
-  /* Recording indicator */
+  /* Recording indicator — ultradiscreto para consultorio */
   .recording-dot {
-    @apply w-3 h-3 rounded-full bg-red-500 animate-recording-pulse;
+    @apply w-1.5 h-1.5 rounded-full bg-teal-600/70;
   }
 
-  .voice-wave {
-    display: flex;
-    align-items: flex-end;
-    justify-content: center;
-    gap: 3px;
-    height: 92px;
-    padding: 4px 0;
+  .voice-listen-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 999px;
+    background: #0f766e;
+    opacity: 0.55;
+    flex-shrink: 0;
+    box-shadow: 0 0 0 0 rgba(15, 118, 110, 0.16);
+    animation: voiceListenPulse 2.8s ease-in-out infinite;
   }
 
-  .voice-wave span {
-    width: 5px;
-    min-height: 8px;
-    border-radius: 99px;
-    background: linear-gradient(to top, #0f766e, #2dd4bf);
-    box-shadow: 0 0 10px rgba(45, 212, 191, 0.45);
-    transition: height 55ms linear, background-color 120ms ease;
-  }
-
-  .voice-wave span.is-loud {
-    background: linear-gradient(to top, #b91c1c, #f87171);
-    box-shadow: 0 0 12px rgba(248, 113, 113, 0.55);
-  }
-
-  .voice-record-btn.is-recording {
-    animation: recordingPulse 1.2s ease-in-out infinite;
+  .voice-record-btn.is-listening {
+    box-shadow: 0 0 0 1px rgba(15, 118, 110, 0.28);
+    animation: voiceListenHalo 3.2s ease-in-out infinite;
   }
 }
 
@@ -333,103 +322,24 @@ html.dark section {
   color: #fecaca !important;
 }
 
-.dark .voice-wave span {
-  background: linear-gradient(to top, #0f766e, #5eead4);
-  box-shadow: 0 0 12px rgba(45, 212, 191, 0.75);
-}
-
-.dark .voice-wave span.is-loud {
-  background: linear-gradient(to top, #991b1b, #fca5a5);
-  box-shadow: 0 0 12px rgba(252, 165, 165, 0.7);
-}
-
-.voice-eq-wrap {
-  position: relative;
-  width: 100%;
-  min-height: 96px;
-  height: 96px;
-  border-radius: 12px;
-  overflow: hidden;
-  background: #042f2e !important;
-  border: 2px solid #2dd4bf !important;
-}
-
-.voice-eq-canvas {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  display: block;
-  z-index: 2;
-}
-
-.voice-eq-sticky {
-  position: sticky;
-  top: 0;
-  z-index: 30;
-  display: grid;
-  gap: 6px;
-  padding: 8px 10px;
-  margin-bottom: 8px;
-  border-radius: 10px;
-  background: #042f2e;
-  border: 1px solid #2dd4bf;
-}
-
-.voice-eq-sticky-label {
-  margin: 0;
-  color: #ccfbf1;
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.voice-eq-sticky-canvas {
-  width: 100%;
-  height: 40px;
-  display: block;
-}
-
-@media (max-width: 640px) {
-  .voice-eq-wrap {
-    min-height: 72px;
-    height: 72px;
+@keyframes voiceListenPulse {
+  0%, 100% {
+    opacity: 0.4;
+    box-shadow: 0 0 0 0 rgba(15, 118, 110, 0.12);
+  }
+  50% {
+    opacity: 0.8;
+    box-shadow: 0 0 0 5px rgba(15, 118, 110, 0.06);
   }
 }
 
-.voice-eq {
-  display: flex !important;
-  align-items: flex-end !important;
-  justify-content: center;
-  gap: 4px;
-  width: 100%;
-  height: 148px !important;
-  min-height: 148px !important;
-  padding: 12px 10px 10px;
-  background: #0b1220 !important;
+@keyframes voiceListenHalo {
+  0%, 100% { box-shadow: 0 0 0 1px rgba(15, 118, 110, 0.22); }
+  50% { box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.08); }
 }
 
-.voice-eq-bar {
-  flex: 1 1 0;
-  min-width: 4px;
-  max-width: 12px;
-  height: 100% !important;
-  border-radius: 99px;
-  transform-origin: center bottom;
-  background: linear-gradient(to top, #0f766e, #99f6e4) !important;
-  box-shadow: 0 0 10px rgba(45, 212, 191, 0.55);
-  animation-name: voiceEqPulse;
-  animation-timing-function: ease-in-out;
-  animation-iteration-count: infinite;
-}
-
-@keyframes voiceEqPulse {
-  0%, 100% { transform: scaleY(0.18); }
-  50% { transform: scaleY(1); }
-}
-
-html.dark .voice-eq-wrap,
-html.dark .voice-eq {
-  background-color: #0b1220 !important;
+.dark .voice-listen-dot {
+  background: #5eead4;
 }
 
 /* Modal / overlay backgrounds */

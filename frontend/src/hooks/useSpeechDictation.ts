@@ -23,7 +23,7 @@ type RecognitionInstance = {
   stop(): void;
   abort(): void;
   onresult: ((event: { resultIndex: number; results: ArrayLike<{ isFinal: boolean; 0: { transcript: string } }> }) => void) | null;
-  onerror: (() => void) | null;
+  onerror: ((event?: { error?: string }) => void) | null;
   onend: (() => void) | null;
 };
 
@@ -44,6 +44,9 @@ function pickRecorderMime(): string {
 }
 
 async function openClinicalMic(): Promise<MediaStream> {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    throw new Error('getUserMedia no está disponible. Use HTTPS o localhost.');
+  }
   try {
     const stream = await navigator.mediaDevices.getUserMedia(MIC_CONSTRAINTS);
     await Promise.all(
@@ -56,7 +59,8 @@ async function openClinicalMic(): Promise<MediaStream> {
       )
     );
     return stream;
-  } catch {
+  } catch (err) {
+    console.error('[dictado] getUserMedia con constraints clínicas falló, reintento básico:', err);
     return navigator.mediaDevices.getUserMedia({ audio: true });
   }
 }
@@ -222,7 +226,8 @@ export function useSpeechDictation(onFinal: (transcript: string) => void) {
       setInterim(live);
       if (finalChunk.trim()) onFinalRef.current(finalChunk.trim());
     };
-    recognition.onerror = () => {
+    recognition.onerror = (event?: { error?: string }) => {
+      console.error('[dictado] SpeechRecognition.onerror:', event?.error ?? event);
       if (!wantListenRef.current) setListening(false);
     };
     recognition.onend = () => {
@@ -248,28 +253,48 @@ export function useSpeechDictation(onFinal: (transcript: string) => void) {
   }, [releaseStream, stopAnalyserNodes, stopRecorder]);
 
   const start = useCallback(async () => {
+    console.log('[dictado] start() — pidiendo micrófono');
     wantListenRef.current = true;
     setListening(true);
-    const Ctx = getAudioContextConstructor();
-    const audioCtx = Ctx ? new Ctx() : undefined;
-    if (audioCtx && audioCtx.state === 'suspended') void audioCtx.resume();
+    try {
+      const Ctx = getAudioContextConstructor();
+      const audioCtx = Ctx ? new Ctx() : undefined;
+      if (audioCtx && audioCtx.state === 'suspended') {
+        await audioCtx.resume();
+        console.log('[dictado] AudioContext:', audioCtx.state);
+      }
 
-    const stream = await openClinicalMic();
-    streamRef.current = stream;
-    try {
-      await attachAnalyser(stream, audioCtx);
-    } catch {
-      /* ondas CSS de respaldo */
-    }
-    try {
-      startRecorder(stream);
-    } catch {
-      /* MediaRecorder no disponible */
-    }
-    try {
-      recognitionRef.current?.start();
-    } catch {
-      /* already started */
+      const stream = await openClinicalMic();
+      streamRef.current = stream;
+      console.log('[dictado] micrófono activo, tracks:', stream.getAudioTracks().map((t) => t.label || t.kind));
+
+      try {
+        await attachAnalyser(stream, audioCtx);
+      } catch (err) {
+        console.error('[dictado] analizador de ondas falló:', err);
+      }
+      try {
+        startRecorder(stream);
+        console.log('[dictado] MediaRecorder estado:', recorderRef.current?.state);
+      } catch (err) {
+        console.error('[dictado] MediaRecorder no pudo iniciar:', err);
+      }
+      try {
+        recognitionRef.current?.start();
+        console.log('[dictado] SpeechRecognition.start() llamado');
+      } catch (err) {
+        console.error('[dictado] SpeechRecognition.start() falló:', err);
+      }
+    } catch (err) {
+      console.error('[dictado] error al iniciar el micrófono:', err);
+      try {
+        recognitionRef.current?.start();
+        console.log('[dictado] fallback SpeechRecognition.start()');
+      } catch (recErr) {
+        console.error('[dictado] fallback SpeechRecognition falló:', recErr);
+        wantListenRef.current = false;
+        setListening(false);
+      }
     }
   }, [attachAnalyser, startRecorder]);
 

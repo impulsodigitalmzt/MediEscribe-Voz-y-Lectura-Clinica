@@ -1,7 +1,6 @@
 import { FileText, Loader2, Mic, Shield, Square, Upload } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { useSpeechDictation } from '../../hooks/useSpeechDictation';
-import VoiceEqualizer from './VoiceEqualizer';
 
 type Props = {
   dictado: string;
@@ -21,7 +20,7 @@ export default function VoiceDictationPanel({
   dictadoRef.current = dictado;
   const [showWaves, setShowWaves] = useState(false);
   const [mostrarDictado, setMostrarDictado] = useState(false);
-  const { listening, interim, levelsRef, micLive, supported, start, stop } = useSpeechDictation((chunk) => {
+  const { listening, interim, supported, start, stop } = useSpeechDictation((chunk) => {
     const current = dictadoRef.current;
     onDictado(current ? `${current.trim()} ${chunk}` : chunk);
   });
@@ -33,13 +32,24 @@ export default function VoiceDictationPanel({
   const capturing = showWaves || listening;
   const textoCaja = capturing && interim ? `${dictado}${dictado ? ' ' : ''}${interim}` : dictado;
 
-  const handleStart = () => {
+  const handleStart = async () => {
+    console.log('[dictado] clic en Dictar por voz — activando escucha');
     setShowWaves(true);
-    onRecordingStart?.();
-    void start();
+    try {
+      onRecordingStart?.();
+    } catch (err) {
+      console.error('[dictado] onRecordingStart falló:', err);
+    }
+    try {
+      await start();
+      console.log('[dictado] escucha activa');
+    } catch (err) {
+      console.error('[dictado] start() rechazado:', err);
+    }
   };
 
   const handleStopAndProcess = async () => {
+    console.log('[dictado] clic en Detener — cerrando micrófono');
     const texto = textoCaja;
     if (texto !== dictado) onDictado(texto);
     setShowWaves(false);
@@ -50,6 +60,15 @@ export default function VoiceDictationPanel({
       return;
     }
     onGenerateText(dictadoRef.current || texto);
+  };
+
+  const handleMicClick = () => {
+    console.log('[dictado] clic en botón de micrófono, capturing=', capturing);
+    if (capturing) {
+      void handleStopAndProcess();
+      return;
+    }
+    void handleStart();
   };
 
   const handleGenerarTexto = async () => {
@@ -66,7 +85,7 @@ export default function VoiceDictationPanel({
         <div>
           <h2 className="text-sm font-semibold text-slate-800">Copiloto de dictado</h2>
           <p className="text-sm text-slate-600">
-            Las ondas capturan el audio de forma continua (MediaRecorder) y lo envían al Worker para Whisper y SOAP.
+            El audio se captura en segundo plano y se envía al Worker para Whisper y SOAP.
             El texto crudo no se muestra en la nota.
           </p>
         </div>
@@ -75,20 +94,31 @@ export default function VoiceDictationPanel({
         </span>
       </div>
 
-      <div className="flex flex-col sm:flex-row gap-3">
-        <button
-          type="button"
-          className={
-            capturing
-              ? 'btn-danger py-3.5 px-6 text-base font-semibold shadow-lg shadow-red-600/30 min-h-[52px] voice-record-btn is-recording'
-              : 'btn-primary py-3.5 px-6 text-base font-semibold shadow-lg shadow-teal-600/30 min-h-[52px] voice-record-btn'
-          }
-          onClick={capturing ? () => void handleStopAndProcess() : handleStart}
-          disabled={generating}
-        >
-          {capturing ? <Square className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
-          {capturing ? 'Detener y redactar SOAP' : 'Dictar por voz'}
-        </button>
+      <div className="flex flex-col sm:flex-row gap-3 sm:items-center">
+        <div className="flex items-center gap-2.5">
+          <button
+            type="button"
+            className={
+              capturing
+                ? 'btn-secondary py-3.5 px-6 text-base font-medium min-h-[52px] voice-record-btn is-listening'
+                : 'btn-primary py-3.5 px-6 text-base font-semibold shadow-lg shadow-teal-600/30 min-h-[52px] voice-record-btn'
+            }
+            onClick={handleMicClick}
+            aria-pressed={capturing}
+          >
+            {capturing ? <Square className="w-4 h-4" /> : <Mic className="w-5 h-5" />}
+            {capturing ? 'Detener y redactar SOAP' : 'Dictar por voz'}
+          </button>
+          {capturing ? (
+            <span
+              className="voice-listen-dot"
+              role="status"
+              aria-live="polite"
+              aria-label="Escucha activa"
+              title="Escucha activa"
+            />
+          ) : null}
+        </div>
         <label className="btn-secondary py-3.5 px-6 text-sm font-medium cursor-pointer min-h-[52px]">
           <Upload className="w-4 h-4" />
           {audioFile ? audioFile.name : 'Subir audio'}
@@ -100,19 +130,10 @@ export default function VoiceDictationPanel({
           />
         </label>
       </div>
-
-      {capturing ? (
-        <div className="rounded-xl border-2 border-teal-400 bg-teal-950/5 p-3 space-y-2">
-          <p className="text-xs font-semibold text-teal-800">
-            {micLive ? 'Stream continuo al Worker · micrófono con señal' : 'Grabando · el recorte de 1 s evita huecos si el dictado se reinicia'}
-          </p>
-          <VoiceEqualizer levelsRef={levelsRef} live={micLive} />
-          {!supported ? (
-            <p className="text-xs text-amber-800">
-              Use Chrome o Edge. El audio se envía a Whisper aunque el dictado en vivo no esté disponible.
-            </p>
-          ) : null}
-        </div>
+      {capturing && !supported ? (
+        <p className="text-[11px] text-slate-500">
+          Use Chrome o Edge para dictado en vivo. El audio se envía a Whisper de todos modos.
+        </p>
       ) : null}
 
       <details

@@ -2,7 +2,6 @@ import type { NotaClinica, SignosVitales } from '../types';
 import { vacioSignosVitales } from '../types';
 
 function asTexto(value: unknown): string {
-  if (typeof value === 'string') return value.trim();
   if (typeof value === 'number' && Number.isFinite(value)) return String(value);
   if (Array.isArray(value)) {
     return value
@@ -19,7 +18,10 @@ function asTexto(value: unknown): string {
       .filter(Boolean)
       .join('\n');
   }
-  return '';
+  if (typeof value !== 'string') return '';
+  const text = value.trim();
+  if (!text || /^\[(?:NO MENCIONADO|NOT DISCUSSED)\]$/i.test(text)) return '';
+  return text;
 }
 
 function asObject(value: unknown): Record<string, unknown> | null {
@@ -123,8 +125,67 @@ export function notaClinicaVacia(): NotaClinica {
 }
 
 /**
+ * Normaliza el JSON del Worker a las llaves del editor SOAP.
+ */
+export function extraerSoapDesdeRespuesta(
+  result: {
+    nota?: Partial<NotaClinica> | Record<string, unknown> | null;
+    soap?: Record<string, unknown> | null;
+    consulta?: { nota_estructurada?: Partial<NotaClinica> | Record<string, unknown> | null } | null;
+  } | null | undefined,
+  borrador = '',
+): Pick<NotaClinica, 'motivo_consulta' | 'padecimiento_actual' | 'subjetivo' | 'objetivo' | 'exploracion_fisica' | 'analisis' | 'diagnostico' | 'diagnostico_cie10' | 'pronostico' | 'plan' | 'interrogatorio'> {
+  const notaRaw = (result?.nota ?? result?.consulta?.nota_estructurada ?? {}) as Record<string, unknown>;
+  const nestedNota = (asObject(notaRaw.nota_medica_espanol) ?? asObject(notaRaw.nota) ?? notaRaw) as Record<string, unknown>;
+  const soap = asObject(nestedNota.soap) ?? asObject(result?.soap) ?? {};
+  const plano = aplanarSoap({ ...nestedNota, soap });
+
+  const motivo =
+    asTexto(plano.motivo_consulta) ||
+    asTexto(plano.motivo) ||
+    asTexto(soap.subjetivo) ||
+    asTexto(plano.subjetivo);
+  const padecimiento =
+    asTexto(plano.padecimiento_actual) ||
+    asTexto(plano.subjetivo) ||
+    asTexto(soap.subjetivo) ||
+    motivo;
+  const objetivo =
+    asTexto(plano.objetivo) ||
+    asTexto(plano.exploracion_fisica) ||
+    asTexto(soap.objetivo);
+  const analisis =
+    asTexto(plano.analisis) ||
+    asTexto(plano.diagnostico) ||
+    asTexto(soap.analisis);
+  const plan =
+    asTexto(plano.plan) ||
+    asTexto(plano.plan_tratamiento) ||
+    asTexto(soap.plan) ||
+    asTexto(soap.plan_tratamiento);
+
+  const clinicoBorrador = asTexto(borrador).replace(
+    /^(?:hola|buenos?\s*d[ií]as?|buenas\s*(?:tardes|noches)|s[ií]\s+doctor)[\s,.;:]*/i,
+    '',
+  ).trim();
+
+  return {
+    motivo_consulta: motivo || (clinicoBorrador ? clinicoBorrador.split(/[.!?]/)[0]?.slice(0, 220) || clinicoBorrador : ''),
+    padecimiento_actual: padecimiento || clinicoBorrador,
+    subjetivo: padecimiento || clinicoBorrador,
+    objetivo,
+    exploracion_fisica: objetivo,
+    analisis,
+    diagnostico: analisis,
+    diagnostico_cie10: asTexto(plano.diagnostico_cie10),
+    pronostico: asTexto(plano.pronostico) || asTexto(plano.pronóstico),
+    plan,
+    interrogatorio: asTexto(plano.interrogatorio),
+  };
+}
+
+/**
  * Asigna el JSON clínico (SOAP / NOM-004) a los campos del editor.
- * Nunca usa la transcripción cruda como valor de un textarea.
  */
 export function mapearNotaDesdeIA(
   incoming: Partial<NotaClinica> | Record<string, unknown> | null | undefined,

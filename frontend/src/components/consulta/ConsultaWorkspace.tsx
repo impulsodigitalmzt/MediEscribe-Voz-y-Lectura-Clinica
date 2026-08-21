@@ -11,7 +11,7 @@ import VoiceDictationPanel from './VoiceDictationPanel';
 import NoteEditor from './NoteEditor';
 import ConsentimientoInformado from './ConsentimientoInformado';
 import { stampMexicoNow } from '../../utils';
-import { mapearNotaDesdeIA, notaClinicaVacia } from '../../lib/mapearNotaClinica';
+import { extraerSoapDesdeRespuesta, mapearNotaDesdeIA, notaClinicaVacia } from '../../lib/mapearNotaClinica';
 
 const EMPTY_NOTA: NotaClinica = notaClinicaVacia();
 
@@ -150,6 +150,29 @@ export default function ConsultaWorkspace() {
     setNota(mapped);
   };
 
+  const asignarSoapAUi = (result: { nota?: NotaClinica | null; consulta?: ConsultaMedica | null }, borrador: string) => {
+    const data = extraerSoapDesdeRespuesta(result, borrador);
+    console.log('Asignando a UI:', data);
+    setNota((prev) => ({
+      ...prev,
+      motivo_consulta: data.motivo_consulta || '',
+      padecimiento_actual: data.padecimiento_actual || '',
+      subjetivo: data.subjetivo || data.padecimiento_actual || '',
+      objetivo: data.objetivo || '',
+      exploracion_fisica: data.exploracion_fisica || data.objetivo || '',
+      analisis: data.analisis || '',
+      diagnostico: data.diagnostico || data.analisis || '',
+      diagnostico_cie10: data.diagnostico_cie10 || prev.diagnostico_cie10,
+      pronostico: data.pronostico || '',
+      plan: data.plan || '',
+      interrogatorio: data.interrogatorio || prev.interrogatorio,
+    }));
+    const motivoEl = document.getElementById('id_del_input_motivo') as HTMLTextAreaElement | null;
+    const padecimientoEl = document.getElementById('id_del_input_padecimiento') as HTMLTextAreaElement | null;
+    if (motivoEl) motivoEl.value = data.motivo_consulta || '';
+    if (padecimientoEl) padecimientoEl.value = data.padecimiento_actual || '';
+  };
+
   const handleGenerarDesdeTexto = async (textoCaja?: string) => {
     const texto = (textoCaja ?? dictado).trim();
     if (locked) {
@@ -192,11 +215,16 @@ export default function ConsultaWorkspace() {
       }
       const result = await api.procesarConsultaTexto(texto, pid, especialidad, extras);
       console.log('Respuesta de IA recibida:', result);
-      if (result.consulta) hydrate(result.consulta);
+      if (result.consulta) {
+        setConsulta(result.consulta);
+        setGuardia(result.consulta.guardia_legal ?? result.guardia_legal);
+        setAclaraciones(result.consulta.aclaraciones ?? []);
+      }
       if (result.transcripcion?.trim()) setDictado(result.transcripcion);
-      aplicarNotaGenerada(result.nota ?? result.consulta?.nota_estructurada ?? undefined, stamp.fecha, stamp.hora);
+      if (result.nota) aplicarNotaGenerada(result.nota, stamp.fecha, stamp.hora);
+      asignarSoapAUi(result, result.transcripcion || texto);
       if (result.receta) setReceta({ ...EMPTY_RECETA, ...result.receta, medicamentos: result.receta.medicamentos ?? [] });
-      setGuardia(result.guardia_legal);
+      setGuardia(result.guardia_legal ?? result.consulta?.guardia_legal);
       setSavedMsg('Nota SOAP sintetizada (NOM-004). El borrador de dictado se conserva; revise S-O-A-P y guarde.');
     } catch (err) {
       if (err instanceof ConsultaValidacionError) {
@@ -250,11 +278,15 @@ export default function ConsultaWorkspace() {
         setNota((n) => ({ ...n, fecha: stamp.fecha, hora: stamp.hora }));
       }
       const result = await api.procesarConsultaAudio(audio, pid, especialidad, extras);
-      if (result.consulta) hydrate(result.consulta);
+      if (result.consulta) {
+        setConsulta(result.consulta);
+        setAclaraciones(result.consulta.aclaraciones ?? []);
+      }
       if (result.transcripcion?.trim()) setDictado(result.transcripcion);
-      aplicarNotaGenerada(result.nota ?? result.consulta?.nota_estructurada ?? undefined, stamp.fecha, stamp.hora);
+      if (result.nota) aplicarNotaGenerada(result.nota, stamp.fecha, stamp.hora);
+      asignarSoapAUi(result, result.transcripcion || dictado);
       if (result.receta) setReceta({ ...EMPTY_RECETA, ...result.receta, medicamentos: result.receta.medicamentos ?? [] });
-      setGuardia(result.guardia_legal);
+      setGuardia(result.guardia_legal ?? result.consulta?.guardia_legal);
       setSavedMsg('Audio enviado al Worker (Whisper → SOAP). El borrador muestra la transcripción; revise CIE-10 y receta, luego guarde.');
     } catch (err) {
       if (err instanceof ConsultaValidacionError) {

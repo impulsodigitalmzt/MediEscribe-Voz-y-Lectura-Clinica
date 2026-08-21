@@ -106,8 +106,9 @@ export default function NoteEditor({
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 items-start">
         <SoapCard id="soap-s" letter="S" title="Subjetivo" hint="Motivo, padecimiento e interrogatorio (NOM-004 6.1.1)">
-          <Area label="Motivo de consulta" value={nota.motivo_consulta} onChange={(v) => setField('motivo_consulta', v)} locked={locked} compact />
+          <Area id="id_del_input_motivo" label="Motivo de consulta" value={nota.motivo_consulta} onChange={(v) => setField('motivo_consulta', v)} locked={locked} compact />
           <Area
+            id="id_del_input_padecimiento"
             label="Subjetivo / padecimiento actual"
             value={nota.subjetivo || nota.padecimiento_actual}
             onChange={(v) => onNota({ ...nota, subjetivo: v, padecimiento_actual: v })}
@@ -312,12 +313,13 @@ function Vital({ label, value, onChange, locked }: { label: string; value: strin
   );
 }
 
-function Area({ label, value, onChange, locked, compact }: { label: string; value: string; onChange: (v: string) => void; locked: boolean; compact?: boolean }) {
+function Area({ id, label, value, onChange, locked, compact }: { id?: string; label: string; value: string; onChange: (v: string) => void; locked: boolean; compact?: boolean }) {
   const missing = !value || value === '[NO MENCIONADO]';
   return (
     <div className={clsx(missing ? 'note-section-missing' : 'note-section')}>
-      <label className="section-header">{label}</label>
+      <label className="section-header" htmlFor={id}>{label}</label>
       <textarea
+        id={id}
         className={clsx(
           'w-full p-3 rounded-lg border border-slate-200 text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-teal-500 resize-y disabled:bg-slate-50',
           compact ? 'min-h-[72px]' : 'min-h-[96px]',

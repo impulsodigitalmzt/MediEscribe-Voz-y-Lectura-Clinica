@@ -432,11 +432,22 @@ async function respuestaConsulta(
     guardia_legal: Awaited<ReturnType<typeof publicConsulta>>["guardia_legal"];
   }
 ) {
+  const nota = result.nota;
   return {
     ok: true,
     consulta: await publicConsulta(result.row, result.paciente, phiSecret),
     transcripcion: result.transcripcion || "",
-    nota: result.nota,
+    nota: {
+      ...nota,
+      motivo_consulta: nota.motivo_consulta || nota.subjetivo || "",
+      padecimiento_actual: nota.padecimiento_actual || nota.subjetivo || "",
+      subjetivo: nota.subjetivo || nota.padecimiento_actual || "",
+      objetivo: nota.objetivo || nota.exploracion_fisica || "",
+      exploracion_fisica: nota.exploracion_fisica || nota.objetivo || "",
+      analisis: nota.analisis || nota.diagnostico || "",
+      diagnostico: nota.diagnostico || nota.analisis || "",
+      plan: nota.plan || "",
+    },
     receta: result.receta,
     paciente: result.paciente,
     idioma_detectado: result.receta.idioma,

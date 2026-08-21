@@ -1,27 +1,77 @@
 import type { NotaClinica, SignosVitales } from '../types';
 import { vacioSignosVitales } from '../types';
 
-function asTexto(value: unknown): string {
+const PROPIEDADES_TEXTO = [
+  'text', 'texto', 'descripcion', 'descripción', 'contenido', 'content',
+  'value', 'valor', 'narrative', 'narrativa', 'resumen',
+  'motivo_consulta', 'motivo', 'padecimiento_actual', 'padecimiento',
+  'subjetivo', 'chief_complaint', 'hpi', 'objetivo', 'exploracion_fisica',
+  'analisis', 'análisis', 'diagnostico', 'plan', 'plan_tratamiento',
+] as const;
+
+const CAMPOS_STRING_NOTA: Array<keyof NotaClinica> = [
+  'nombre_paciente', 'edad', 'sexo', 'domicilio', 'ocupacion', 'fecha', 'hora',
+  'medico_nombre', 'medico_cedula', 'medico_especialidad',
+  'motivo_consulta', 'padecimiento_actual', 'interrogatorio',
+  'antecedentes_personales', 'antecedentes_quirurgicos', 'medicamentos', 'alergias',
+  'antecedentes_familiares', 'antecedentes_sociales', 'exploracion_fisica', 'estudios',
+  'diagnostico_presuntivo', 'diagnosticos_diferenciales', 'diagnostico', 'diagnostico_cie10',
+  'pronostico', 'plan', 'seguimiento', 'notas_evolucion', 'resumen',
+  'subjetivo', 'objetivo', 'analisis', 'sello_responsable',
+];
+
+function asTexto(value: unknown, depth = 0): string {
+  if (value == null) return '';
   if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  if (typeof value === 'boolean' || typeof value === 'function') return '';
+  if (typeof value === 'string') {
+    const text = value.trim();
+    if (!text || text === '[object Object]' || /^\[(?:NO MENCIONADO|NOT DISCUSSED)\]$/i.test(text)) return '';
+    return text;
+  }
+  if (depth > 5) return '';
   if (Array.isArray(value)) {
     return value
       .map((item) => {
         if (typeof item === 'string') return item.trim();
         if (item && typeof item === 'object') {
           const row = item as Record<string, unknown>;
-          return [row.medicamento ?? row.nombre, row.dosis, row.via ?? row['vía'], row.periodicidad ?? row.frecuencia]
+          const meds = [row.medicamento ?? row.nombre, row.dosis, row.via ?? row['vía'], row.periodicidad ?? row.frecuencia]
             .filter((part) => typeof part === 'string' && part.trim())
             .join(' ');
+          return meds || asTexto(item, depth + 1);
         }
-        return '';
+        return asTexto(item, depth + 1);
       })
       .filter(Boolean)
       .join('\n');
   }
-  if (typeof value !== 'string') return '';
-  const text = value.trim();
-  if (!text || /^\[(?:NO MENCIONADO|NOT DISCUSSED)\]$/i.test(text)) return '';
-  return text;
+  if (typeof value === 'object') {
+    const row = value as Record<string, unknown>;
+    for (const key of PROPIEDADES_TEXTO) {
+      if (!(key in row)) continue;
+      const extracted = asTexto(row[key], depth + 1);
+      if (extracted) return extracted;
+    }
+    return Object.values(row).map((item) => asTexto(item, depth + 1)).filter(Boolean).join(' ').trim();
+  }
+  return '';
+}
+
+/** Garantiza que los campos SOAP del estado React sean strings planos. */
+export function asegurarNotaStrings(nota: NotaClinica): NotaClinica {
+  const next = { ...nota };
+  for (const key of CAMPOS_STRING_NOTA) {
+    (next[key] as string) = asTexto(next[key]);
+  }
+  if (!next.signos_vitales || typeof next.signos_vitales !== 'object') {
+    next.signos_vitales = vacioSignosVitales();
+  }
+  if (!Array.isArray(next.solicitudes_estudio)) next.solicitudes_estudio = [];
+  if (!Array.isArray(next.tratamiento)) next.tratamiento = [];
+  if (!Array.isArray(next.campos_inciertos)) next.campos_inciertos = [];
+  if (!Array.isArray(next.secciones_faltantes)) next.secciones_faltantes = [];
+  return next;
 }
 
 function asObject(value: unknown): Record<string, unknown> | null {
@@ -218,5 +268,5 @@ export function mapearNotaDesdeIA(
   if (!Array.isArray(mapped.solicitudes_estudio)) mapped.solicitudes_estudio = [];
   if (!mapped.diagnostico_cie10) mapped.diagnostico_cie10 = '';
 
-  return mapped;
+  return asegurarNotaStrings(mapped);
 }

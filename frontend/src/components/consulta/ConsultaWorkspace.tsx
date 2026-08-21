@@ -11,7 +11,7 @@ import VoiceDictationPanel from './VoiceDictationPanel';
 import NoteEditor from './NoteEditor';
 import ConsentimientoInformado from './ConsentimientoInformado';
 import { stampMexicoNow } from '../../utils';
-import { extraerSoapDesdeRespuesta, mapearNotaDesdeIA, notaClinicaVacia } from '../../lib/mapearNotaClinica';
+import { asegurarNotaStrings, extraerSoapDesdeRespuesta, mapearNotaDesdeIA, notaClinicaVacia } from '../../lib/mapearNotaClinica';
 
 const EMPTY_NOTA: NotaClinica = notaClinicaVacia();
 
@@ -36,7 +36,10 @@ export default function ConsultaWorkspace() {
   const navigate = useNavigate();
   const { user } = useAuth();
   const [consulta, setConsulta] = useState<ConsultaMedica | null>(null);
-  const [nota, setNota] = useState<NotaClinica>(EMPTY_NOTA);
+  const [nota, setNotaRaw] = useState<NotaClinica>(EMPTY_NOTA);
+  const setNota = (next: NotaClinica | ((prev: NotaClinica) => NotaClinica)) => {
+    setNotaRaw((prev) => asegurarNotaStrings(typeof next === 'function' ? next(prev) : next));
+  };
   const [receta, setReceta] = useState<RecetaPaciente>(EMPTY_RECETA);
   const [guardia, setGuardia] = useState<DictamenNom004 | undefined>();
   const [loading, setLoading] = useState(true);
@@ -212,6 +215,11 @@ export default function ConsultaWorkspace() {
   const asignarSoapAUi = (result: { nota?: NotaClinica | null; consulta?: ConsultaMedica | null }, borrador: string) => {
     const data = extraerSoapDesdeRespuesta(result, borrador);
     console.log('Asignando a UI:', data);
+    console.log('[SOAP tipos]', {
+      motivo_consulta: typeof data.motivo_consulta,
+      padecimiento_actual: typeof data.padecimiento_actual,
+      subjetivo: typeof data.subjetivo,
+    });
     console.log('[SOAP auditoría IDs vs llaves]', {
       motivo_consulta: { id: 'id_del_input_motivo', valor: data.motivo_consulta, el: Boolean(document.getElementById('id_del_input_motivo')) },
       padecimiento_actual: { id: 'id_del_input_padecimiento', valor: data.padecimiento_actual, el: Boolean(document.getElementById('id_del_input_padecimiento')) },

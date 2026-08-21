@@ -20,7 +20,8 @@ import {
   withSql,
 } from "../lib/consultas";
 import { exigirPaciente, isUuid, listHistorialPaciente } from "../lib/pacientes";
-import type { NotaClinica, RecetaPaciente } from "../lib/nota-clinica";
+import { forzarNotaTextoPlano, type NotaClinica, type RecetaPaciente } from "../lib/nota-clinica";
+import { textoCampoClinico } from "../lib/texto-campo";
 import { registrarConsentimientoConsulta } from "../lib/consentimiento";
 import {
   actualizarNotaAclaracion,
@@ -438,21 +439,21 @@ async function respuestaConsulta(
     guardia_legal: Awaited<ReturnType<typeof publicConsulta>>["guardia_legal"];
   }
 ) {
-  const nota = result.nota;
+  const nota = forzarNotaTextoPlano(result.nota);
   return {
     ok: true,
     consulta: await publicConsulta(result.row, result.paciente, phiSecret),
     transcripcion: result.transcripcion || "",
     nota: {
       ...nota,
-      motivo_consulta: nota.motivo_consulta || nota.subjetivo || "",
-      padecimiento_actual: nota.padecimiento_actual || nota.subjetivo || "",
-      subjetivo: nota.subjetivo || nota.padecimiento_actual || "",
-      objetivo: nota.objetivo || nota.exploracion_fisica || "",
-      exploracion_fisica: nota.exploracion_fisica || nota.objetivo || "",
-      analisis: nota.analisis || nota.diagnostico || "",
-      diagnostico: nota.diagnostico || nota.analisis || "",
-      plan: nota.plan || "",
+      motivo_consulta: textoCampoClinico(nota.motivo_consulta) || textoCampoClinico(nota.subjetivo) || "",
+      padecimiento_actual: textoCampoClinico(nota.padecimiento_actual) || textoCampoClinico(nota.subjetivo) || "",
+      subjetivo: textoCampoClinico(nota.subjetivo) || textoCampoClinico(nota.padecimiento_actual) || "",
+      objetivo: textoCampoClinico(nota.objetivo) || textoCampoClinico(nota.exploracion_fisica) || "",
+      exploracion_fisica: textoCampoClinico(nota.exploracion_fisica) || textoCampoClinico(nota.objetivo) || "",
+      analisis: textoCampoClinico(nota.analisis) || textoCampoClinico(nota.diagnostico) || "",
+      diagnostico: textoCampoClinico(nota.diagnostico) || textoCampoClinico(nota.analisis) || "",
+      plan: textoCampoClinico(nota.plan) || "",
     },
     receta: result.receta,
     paciente: result.paciente,

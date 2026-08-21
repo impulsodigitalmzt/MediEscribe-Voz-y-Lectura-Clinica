@@ -2,6 +2,7 @@ import { clipTranscript } from "./audio";
 import { normalizeLanguageCode } from "./groq";
 import { logSinPhi } from "./phi";
 import { aplicarSoapANota, depurarTextoClinico, esRuidoNoClinico, sintetizarSoapClinico } from "./soap-ia";
+import { textoCampoClinico } from "./texto-campo";
 import type {
   DatosMedico,
   DocumentacionConsulta,
@@ -154,7 +155,7 @@ function sanitizarNotaContraTranscripcion(nota: NotaClinica, transcripcion: stri
 }
 
 function textoPlano(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
+  return textoCampoClinico(value);
 }
 
 function aplanarSoap(raw: Record<string, unknown>): Record<string, unknown> {
@@ -342,7 +343,7 @@ export async function redactarNotaClinica(
     conocido,
     datos
   );
-  const nota = sanitizarNotaContraTranscripcion(aplicarSoapANota(base, soap), clipped);
+  const nota = forzarNotaTextoPlano(sanitizarNotaContraTranscripcion(aplicarSoapANota(base, soap), clipped));
   const receta = recetaDesdeNota(nota, idiomaHint || "es");
   receta.idioma = receta.idioma || idiomaHint || "es";
   receta.idioma_nombre = receta.idioma_nombre || nombreIdioma(receta.idioma);
@@ -366,9 +367,8 @@ export function normalizeNota(
 ): NotaClinica {
   const text = (...keys: string[]) => {
     for (const key of keys) {
-      const value = raw[key];
-      if (typeof value === "string" && value.trim()) return value.trim();
-      if (typeof value === "number" && Number.isFinite(value)) return String(value);
+      const extracted = textoCampoClinico(raw[key]);
+      if (extracted) return extracted;
     }
     return NO_MENCIONADO;
   };
@@ -445,7 +445,21 @@ export function normalizeNota(
   if (transcripcion.trim().length < 40 && !nota.campos_inciertos.includes("transcripcion_corta")) {
     nota.campos_inciertos = [...nota.campos_inciertos, "transcripcion_corta"];
   }
-  return sanitizarNotaContraTranscripcion(aplicarSelloLegal(nota, datos), transcripcion);
+  return forzarNotaTextoPlano(sanitizarNotaContraTranscripcion(aplicarSelloLegal(nota, datos), transcripcion));
+}
+
+export function forzarNotaTextoPlano(nota: NotaClinica): NotaClinica {
+  const next = { ...nota };
+  for (const key of TEXT_KEYS) {
+    next[key] = textoCampoClinico(next[key]);
+  }
+  next.medico_especialidad = textoCampoClinico(next.medico_especialidad);
+  next.subjetivo = textoCampoClinico(next.subjetivo);
+  next.objetivo = textoCampoClinico(next.objetivo);
+  next.analisis = textoCampoClinico(next.analisis);
+  next.diagnostico_cie10 = textoCampoClinico(next.diagnostico_cie10);
+  next.sello_responsable = textoCampoClinico(next.sello_responsable);
+  return next;
 }
 
 function asObject(value: unknown): Record<string, unknown> | null {

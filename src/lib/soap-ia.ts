@@ -3,6 +3,7 @@ import { groqChatJson } from "./groq";
 import { AppError } from "./errors";
 import { estaVacio, Nom004Error, type FaltanteNom004 } from "./guardia-legal";
 import type { IndicacionTerapeutica, NotaClinica } from "./nota-types";
+import { textoCampoClinico } from "./texto-campo";
 
 export const SOAP_SYSTEM_PROMPT = `Eres el motor de documentación clínica de MediEscribe (NOM-004-SSA3). Extraes ÚNICAMENTE hechos médicos de la transcripción y los colocas en JSON.
 
@@ -39,7 +40,7 @@ export type SoapClinico = {
 };
 
 function asText(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
+  return textoCampoClinico(value);
 }
 
 const TOKEN_RUIDO = new Set([

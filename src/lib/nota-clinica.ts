@@ -1,7 +1,7 @@
 import { clipTranscript } from "./audio";
 import { normalizeLanguageCode } from "./groq";
 import { logSinPhi } from "./phi";
-import { aplicarSoapANota, sintetizarSoapClinico } from "./soap-ia";
+import { aplicarSoapANota, depurarTextoClinico, esRuidoNoClinico, sintetizarSoapClinico } from "./soap-ia";
 import type {
   DatosMedico,
   DocumentacionConsulta,
@@ -137,14 +137,16 @@ function esCopiaDeTranscripcion(campo: string, transcripcion: string): boolean {
 function sanitizarNotaContraTranscripcion(nota: NotaClinica, transcripcion: string): NotaClinica {
   const next = { ...nota };
   for (const key of CAMPOS_NARRATIVOS) {
-    if (esCopiaDeTranscripcion(next[key], transcripcion)) {
-      next[key] = NO_MENCIONADO;
+    if (esCopiaDeTranscripcion(next[key], transcripcion) || esRuidoNoClinico(next[key])) {
+      next[key] = "";
+    } else {
+      next[key] = depurarTextoClinico(next[key]);
     }
   }
-  if (!next.resumen || next.resumen === NO_MENCIONADO || esCopiaDeTranscripcion(next.resumen, transcripcion)) {
+  if (!next.resumen || next.resumen === NO_MENCIONADO || esCopiaDeTranscripcion(next.resumen, transcripcion) || esRuidoNoClinico(next.resumen)) {
     next.resumen = buildResumen(next);
   }
-  next.secciones_faltantes = TEXT_KEYS.filter((key) => next[key] === NO_MENCIONADO);
+  next.secciones_faltantes = TEXT_KEYS.filter((key) => !next[key] || next[key] === NO_MENCIONADO);
   return next;
 }
 
@@ -156,10 +158,10 @@ function aplanarSoap(raw: Record<string, unknown>): Record<string, unknown> {
   const soap = asObject(raw.soap);
   if (!soap) return raw;
   const next = { ...raw };
-  const subjetivo = textoPlano(soap.subjetivo);
-  const objetivo = textoPlano(soap.objetivo);
-  const analisis = textoPlano(soap.analisis) || textoPlano(soap.análisis);
-  const planSoap = textoPlano(soap.plan);
+  const subjetivo = depurarTextoClinico(textoPlano(soap.subjetivo));
+  const objetivo = depurarTextoClinico(textoPlano(soap.objetivo));
+  const analisis = depurarTextoClinico(textoPlano(soap.analisis) || textoPlano(soap.análisis));
+  const planSoap = depurarTextoClinico(textoPlano(soap.plan));
   if (!textoPlano(next.padecimiento_actual) && subjetivo) next.padecimiento_actual = subjetivo;
   if (!textoPlano(next.motivo_consulta) && subjetivo) {
     const corta = subjetivo.split(/[.!?]/)[0]?.trim() || subjetivo;
@@ -708,15 +710,15 @@ export function nombreDesdeNota(nota: NotaClinica, fallback: string): string {
 
 function buildResumen(nota: NotaClinica): string {
   const id = [
-    nota.nombre_paciente !== NO_MENCIONADO ? nota.nombre_paciente : "",
-    nota.edad !== NO_MENCIONADO ? nota.edad : "",
-    nota.ocupacion !== NO_MENCIONADO ? nota.ocupacion : "",
+    nota.nombre_paciente && nota.nombre_paciente !== NO_MENCIONADO ? nota.nombre_paciente : "",
+    nota.edad && nota.edad !== NO_MENCIONADO ? nota.edad : "",
+    nota.ocupacion && nota.ocupacion !== NO_MENCIONADO ? nota.ocupacion : "",
   ].filter(Boolean);
   const parts = [
     id.length ? `Paciente: ${id.join(", ")}` : "",
-    nota.motivo_consulta !== NO_MENCIONADO ? `Motivo: ${nota.motivo_consulta}` : "",
-    nota.diagnostico !== NO_MENCIONADO ? `Diagnóstico: ${nota.diagnostico}` : "",
-    nota.plan !== NO_MENCIONADO ? `Plan: ${nota.plan}` : "",
+    nota.motivo_consulta && nota.motivo_consulta !== NO_MENCIONADO ? `Motivo: ${nota.motivo_consulta}` : "",
+    nota.diagnostico && nota.diagnostico !== NO_MENCIONADO ? `Diagnóstico: ${nota.diagnostico}` : "",
+    nota.plan && nota.plan !== NO_MENCIONADO ? `Plan: ${nota.plan}` : "",
   ].filter(Boolean);
-  return parts.join(". ") || "Consulta documentada; faltan datos clínicos suficientes para un resumen.";
+  return parts.join(". ");
 }

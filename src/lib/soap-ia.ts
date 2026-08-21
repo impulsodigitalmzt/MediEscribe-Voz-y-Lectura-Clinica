@@ -4,7 +4,28 @@ import { AppError } from "./errors";
 import { estaVacio, Nom004Error, type FaltanteNom004 } from "./guardia-legal";
 import type { IndicacionTerapeutica, NotaClinica } from "./nota-types";
 
-export const SOAP_SYSTEM_PROMPT = `Actúa como un experto en informática médica y cumplimiento legal (NOM-004-SSA3). Tu tarea es transformar la transcripción cruda en un objeto JSON con las llaves: subjetivo, objetivo, analisis, plan_tratamiento, medicamentos (array), diagnostico_cie10, pronostico. Mantén la confidencialidad estricta y no incluyas información fuera de este esquema.`;
+export const SOAP_SYSTEM_PROMPT = `Eres el motor de documentación clínica de MediEscribe (NOM-004-SSA3). Extraes ÚNICAMENTE hechos médicos de la transcripción y los colocas en JSON.
+
+FILTRO DE RUIDO (obligatorio):
+- Ignora por completo saludos, despedidas, charla social, pruebas de micrófono o audio, comentarios técnicos sobre si el dictado «ya funciona», «ya quedó» o «ya trabaja bien», muletillas y cualquier frase ajena a la consulta.
+- Ejemplos a descartar: «hola», «buenos días», «buenas tardes», «prueba de micrófono», «uno dos tres», «¿me escuchas?», «ya trabaja bien», «ya quedó», «testing», «ya veo que sí».
+- Esas frases NO deben aparecer en ningún campo, ni siquiera resumidas o parafraseadas.
+
+ASIGNACIÓN SEMÁNTICA:
+- subjetivo: solo motivo de consulta, síntomas, padecimiento actual e historia clínica referida. Si no hay dato médico, "".
+- objetivo: solo exploración física, signos vitales o hallazgos dictados. Si no se exploró, "".
+- analisis: solo diagnóstico, impresión clínica o razonamiento médico dictado. Si no hay, "".
+- plan_tratamiento: solo plan, indicaciones o seguimiento dictados. Si no hay, "".
+- medicamentos: array de {medicamento, dosis, via, periodicidad} solo si se dictó un fármaco. Si no hay, [].
+- diagnostico_cie10: código CIE-10 SOLO si el diagnóstico está dictado o se desprende de hallazgos clínicos explícitos. Si no hay dato, "". NUNCA inventes un código.
+- pronostico: solo si el médico lo dictó. Si no, "".
+
+CAMPOS VACÍOS POR DEFECTO:
+- Si una sección no tiene información médica verídica y pertinente, el valor DEBE ser "" (cadena vacía) o [] en medicamentos.
+- Prohibido inventar, usar saludos como motivo de consulta, o rellenar con frases genéricas («paciente en consulta», «sin datos», «estable», «se recomienda valoración»).
+- No copies la transcripción cruda.
+
+Responde SOLO un objeto JSON con esas llaves.`;
 
 export type SoapClinico = {
   subjetivo: string;
@@ -18,6 +39,47 @@ export type SoapClinico = {
 
 function asText(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
+}
+
+const TOKEN_RUIDO = new Set([
+  "hola", "hello", "hi", "hey", "buenos", "buen", "buena", "buenas", "dias", "día", "dia",
+  "tardes", "noches", "que", "qué", "tal", "como", "cómo", "estas", "estás", "esta", "está",
+  "prueba", "microfono", "micrófono", "micro", "audio", "sonido", "testing", "test", "mic",
+  "check", "uno", "dos", "tres", "se", "escucha", "escuchas", "me", "oiste", "oíste",
+  "ya", "quedo", "quedó", "funciona", "trabaja", "bien", "veo", "si", "sí", "ok", "okay",
+  "vale", "listo", "perfecto", "gracias", "el", "la", "lo", "de", "del", "al", "en", "a",
+  "y", "o", "que", "sí", "no", "pues", "bueno", "este", "esta", "ah", "eh", "mm", "mmm",
+]);
+
+const CLINICO =
+  /\b(dolor|duele|fiebre|tos|nause|nauseas|vómit|vomit|mareo|cefalea|diarrea|alerg|asma|hipertens|diabetes|presi[oó]n|glucosa|temperatura|exploraci[oó]n|abdomen|pulm[oó]n|coraz[oó]n|diagn[oó]stic|tratamiento|medicament|recet|s[ií]ntoma|padecimiento|consulta por|acude por|viene por|antecedente|cirug[ií]a|herida|infecci[oó]n|sangrado|disnea|taquicard|edema|lesi[oó]n|fractura|embarazo|gesta|motivo)\b/i;
+
+function normalizarRuido(texto: string): string {
+  return texto
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/\p{M}/gu, "")
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export function esRuidoNoClinico(texto: string): boolean {
+  const t = normalizarRuido(texto);
+  if (!t) return true;
+  if (CLINICO.test(texto)) return false;
+  const tokens = t.split(" ").filter(Boolean);
+  if (tokens.length === 0) return true;
+  return tokens.every((token) => TOKEN_RUIDO.has(token));
+}
+
+export function depurarTextoClinico(texto: string): string {
+  const raw = asText(texto);
+  if (!raw || esRuidoNoClinico(raw)) return "";
+  const partes = raw.split(/(?<=[.!?¿?])\s+|\n+/).map((item) => item.trim()).filter(Boolean);
+  if (partes.length <= 1) return esRuidoNoClinico(raw) ? "" : raw;
+  const utiles = partes.filter((parte) => !esRuidoNoClinico(parte));
+  return utiles.join(" ").trim();
 }
 
 function parseMedicamentos(raw: unknown): IndicacionTerapeutica[] {
@@ -45,16 +107,23 @@ export function parseSoapClinico(raw: Record<string, unknown>): SoapClinico {
       ? (raw.soap as Record<string, unknown>)
       : raw;
   const cie = asText(raw.diagnostico_cie10) || asText(nested.diagnostico_cie10);
-  return {
-    subjetivo: asText(nested.subjetivo) || asText(raw.subjetivo),
-    objetivo: asText(nested.objetivo) || asText(raw.objetivo),
-    analisis: asText(nested.analisis) || asText(nested.análisis) || asText(raw.analisis),
-    plan_tratamiento:
-      asText(nested.plan_tratamiento) || asText(nested.plan) || asText(raw.plan_tratamiento) || asText(raw.plan),
+  const soap: SoapClinico = {
+    subjetivo: depurarTextoClinico(asText(nested.subjetivo) || asText(raw.subjetivo)),
+    objetivo: depurarTextoClinico(asText(nested.objetivo) || asText(raw.objetivo)),
+    analisis: depurarTextoClinico(asText(nested.analisis) || asText(nested.análisis) || asText(raw.analisis)),
+    plan_tratamiento: depurarTextoClinico(
+      asText(nested.plan_tratamiento) || asText(nested.plan) || asText(raw.plan_tratamiento) || asText(raw.plan)
+    ),
     medicamentos: parseMedicamentos(raw.medicamentos ?? nested.medicamentos),
     diagnostico_cie10: (cie.match(/[A-TV-Z][0-9]{2}(?:\.[0-9]{1,4})?/i)?.[0] ?? cie).toUpperCase(),
-    pronostico: asText(nested.pronostico) || asText(nested.pronóstico) || asText(raw.pronostico),
+    pronostico: depurarTextoClinico(asText(nested.pronostico) || asText(nested.pronóstico) || asText(raw.pronostico)),
   };
+  if (!soap.subjetivo && !soap.objetivo && !soap.analisis && !soap.plan_tratamiento) {
+    soap.diagnostico_cie10 = "";
+    soap.pronostico = "";
+    soap.medicamentos = [];
+  }
+  return soap;
 }
 
 export function validarSoapClinico(soap: SoapClinico): FaltanteNom004[] {
@@ -100,30 +169,34 @@ export function exigirSoapClinico(soap: SoapClinico, nota?: NotaClinica): void {
 }
 
 export function aplicarSoapANota(nota: NotaClinica, soap: SoapClinico): NotaClinica {
-  const motivo = soap.subjetivo.split(/[.!?]/)[0]?.trim().slice(0, 220) || soap.subjetivo;
-  const diagnostico = soap.diagnostico_cie10
-    ? soap.analisis.includes(soap.diagnostico_cie10)
-      ? soap.analisis
-      : `${soap.analisis} (CIE-10: ${soap.diagnostico_cie10})`
-    : soap.analisis;
+  const subjetivo = depurarTextoClinico(soap.subjetivo);
+  const objetivo = depurarTextoClinico(soap.objetivo);
+  const analisis = depurarTextoClinico(soap.analisis);
+  const plan = depurarTextoClinico(soap.plan_tratamiento);
+  const motivo = subjetivo.split(/[.!?]/)[0]?.trim().slice(0, 220) || "";
+  const diagnostico = soap.diagnostico_cie10 && analisis
+    ? analisis.includes(soap.diagnostico_cie10)
+      ? analisis
+      : `${analisis} (CIE-10: ${soap.diagnostico_cie10})`
+    : analisis;
   const medsTexto = soap.medicamentos
     .map((row) => [row.medicamento, row.dosis, row.via, row.periodicidad].filter(Boolean).join(" "))
     .join("\n");
   return {
     ...nota,
-    subjetivo: soap.subjetivo,
-    objetivo: soap.objetivo,
-    analisis: soap.analisis,
-    motivo_consulta: motivo || nota.motivo_consulta,
-    padecimiento_actual: soap.subjetivo || nota.padecimiento_actual,
-    exploracion_fisica: soap.objetivo || nota.exploracion_fisica,
-    diagnostico: diagnostico || nota.diagnostico,
-    diagnostico_cie10: soap.diagnostico_cie10 || nota.diagnostico_cie10,
-    plan: soap.plan_tratamiento || nota.plan,
-    pronostico: soap.pronostico || nota.pronostico,
-    tratamiento: soap.medicamentos.length ? soap.medicamentos : nota.tratamiento,
-    medicamentos: medsTexto || nota.medicamentos,
-    resumen: [motivo, diagnostico, soap.plan_tratamiento].filter(Boolean).join(". "),
+    subjetivo,
+    objetivo,
+    analisis,
+    motivo_consulta: motivo,
+    padecimiento_actual: subjetivo,
+    exploracion_fisica: objetivo,
+    diagnostico,
+    diagnostico_cie10: analisis ? soap.diagnostico_cie10 : "",
+    plan,
+    pronostico: depurarTextoClinico(soap.pronostico),
+    tratamiento: soap.medicamentos.length ? soap.medicamentos : [],
+    medicamentos: medsTexto,
+    resumen: [motivo, diagnostico, plan].filter(Boolean).join(". "),
   };
 }
 
@@ -138,7 +211,9 @@ export async function sintetizarSoapClinico(env: Env, transcripcion: string): Pr
       role: "user",
       content: `Devuelve SOLO JSON con: subjetivo, objetivo, analisis, plan_tratamiento, medicamentos, diagnostico_cie10, pronostico.
 medicamentos: array de {medicamento, dosis, via, periodicidad}. Si no hay fármacos, [].
-diagnostico_cie10: código CIE-10 (p. ej. M54.5). No copies la transcripción.
+diagnostico_cie10: código CIE-10 únicamente si hay diagnóstico clínico en el dictado; si no, "".
+Si el dictado es solo un saludo, charla o prueba de audio, TODOS los campos de texto van "" y medicamentos [].
+No copies la transcripción. No inventes.
 
 TRANSCRIPCIÓN:
 ${clipped}`,

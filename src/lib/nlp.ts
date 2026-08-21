@@ -9,6 +9,9 @@ const NON_CLINICAL = [
   /\b(?:weather|traffic|parking|weekend|holiday|vacation)\b/i,
   /\b(?:how are you|nice to see you|have a good|take care)\b/i,
   /\b(?:insurance|copay|billing|appointment|schedule)\b/i,
+  /^(?:hola|buenos?\s*d[ií]as?|buenas\s*(?:tardes|noches)|hello|hi|hey)\b/i,
+  /\b(?:prueba(?:\s+de)?\s*(?:micr[oó]fono|audio|sonido)|testing|mic\s*check|uno\s+dos\s+tres)\b/i,
+  /\b(?:ya\s+(?:qued[oó]|funciona|trabaja(?:\s+bien)?|listo)|me\s+escuchas|se\s+escucha)\b/i,
 ];
 
 export type ExtractedEntities = {

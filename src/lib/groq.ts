@@ -228,6 +228,7 @@ export async function groqChatJson(
       contentChars: content.length,
       privacy: { store: false, training: "forbidden" },
     });
+    console.log("GROQ RAW ANTES DE PARSEAR:", content);
     if (!content.trim()) {
       if (useStream && attempt === 0) {
         useStream = false;
@@ -252,8 +253,10 @@ export async function groqChatJson(
               ? nota.plan.length
               : 0,
       });
+      console.log("GROQ JSON PARSEADO (llaves):", Object.keys(parsed));
       return parsed;
     } catch (parseError) {
+      console.error("GROQ JSON INVÁLIDO. Texto crudo:", content);
       logGroq("groq_chat_invalid_json", {
         message: parseError instanceof Error ? parseError.message : "parse_error",
         contentChars: content.length,

@@ -390,7 +390,27 @@ class ApiService {
       }),
       signal: AbortSignal.timeout(90_000),
     });
-    const respuesta = await readConsultaIa(response, 'No se pudo procesar la consulta médica.');
+    const contentType = response.headers.get('content-type') ?? '';
+    const raw = await response.text();
+    console.log('[SOAP fetch] status=', response.status, 'ok=', response.ok, 'content-type=', contentType);
+    console.log('[SOAP fetch] cuerpo crudo:', raw);
+    if (!response.ok) {
+      console.error('[SOAP fetch] Worker error HTTP', response.status, {
+        contentType,
+        body: raw,
+      });
+      throw new Error(raw.slice(0, 800) || 'No se pudo procesar la consulta médica.');
+    }
+    if (!contentType.toLowerCase().includes('application/json')) {
+      console.error('[SOAP fetch] Content-Type inesperado (se esperaba application/json):', contentType, raw.slice(0, 400));
+    }
+    let respuesta: ConsultaProcessResponse;
+    try {
+      respuesta = JSON.parse(raw) as ConsultaProcessResponse;
+    } catch (err) {
+      console.error('[SOAP fetch] JSON inválido:', err, raw.slice(0, 800));
+      throw new Error('El Worker no devolvió JSON válido.');
+    }
     console.log('Respuesta de IA recibida:', respuesta);
     return respuesta;
   }

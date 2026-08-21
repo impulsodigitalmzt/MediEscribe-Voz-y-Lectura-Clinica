@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useEffect, type ReactNode } from 'react';
 import { Activity, Copy, Plus, Printer, Trash2 } from 'lucide-react';
 import clsx from 'clsx';
 import type { ConsultaHistorialItem, NotaClinica, RecetaPaciente, SignosVitales } from '../../types';
@@ -67,6 +67,32 @@ export default function NoteEditor({
 
   const imcClase = etiquetaImc(signos.imc);
 
+  useEffect(() => {
+    const ids = {
+      motivo_consulta: 'id_del_input_motivo',
+      padecimiento_actual: 'id_del_input_padecimiento',
+      objetivo: 'id_del_input_objetivo',
+      analisis: 'id_del_input_analisis',
+      plan: 'id_del_input_plan',
+    };
+    console.log('[SOAP auditoría IDs]', {
+      nota: {
+        motivo_consulta: nota.motivo_consulta,
+        padecimiento_actual: nota.padecimiento_actual,
+        subjetivo: nota.subjetivo,
+        objetivo: nota.objetivo,
+        analisis: nota.analisis,
+        plan: nota.plan,
+      },
+      dom: Object.fromEntries(
+        Object.entries(ids).map(([key, id]) => {
+          const el = document.getElementById(id) as HTMLTextAreaElement | null;
+          return [key, { id, encontrado: Boolean(el), valorDom: el?.value ?? null, name: el?.getAttribute('name') ?? null }];
+        }),
+      ),
+    });
+  }, [nota.motivo_consulta, nota.padecimiento_actual, nota.subjetivo, nota.objetivo, nota.analisis, nota.plan]);
+
   return (
     <div className="space-y-4">
       <nav className="no-print flex flex-wrap gap-2 text-[11px] sticky top-14 z-[5] bg-slate-50/95 backdrop-blur py-2">
@@ -106,9 +132,10 @@ export default function NoteEditor({
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 items-start">
         <SoapCard id="soap-s" letter="S" title="Subjetivo" hint="Motivo, padecimiento e interrogatorio (NOM-004 6.1.1)">
-          <Area id="id_del_input_motivo" label="Motivo de consulta" value={nota.motivo_consulta} onChange={(v) => setField('motivo_consulta', v)} locked={locked} compact />
+          <Area id="id_del_input_motivo" name="motivo_consulta" label="Motivo de consulta" value={nota.motivo_consulta} onChange={(v) => setField('motivo_consulta', v)} locked={locked} compact />
           <Area
             id="id_del_input_padecimiento"
+            name="padecimiento_actual"
             label="Subjetivo / padecimiento actual"
             value={nota.subjetivo || nota.padecimiento_actual}
             onChange={(v) => onNota({ ...nota, subjetivo: v, padecimiento_actual: v })}
@@ -144,6 +171,8 @@ export default function NoteEditor({
             ) : null}
           </div>
           <Area
+            id="id_del_input_objetivo"
+            name="objetivo"
             label="Objetivo / exploración física"
             value={nota.objetivo || nota.exploracion_fisica}
             onChange={(v) => onNota({ ...nota, objetivo: v, exploracion_fisica: v })}
@@ -156,6 +185,8 @@ export default function NoteEditor({
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
             <div className="sm:col-span-2">
               <Area
+                id="id_del_input_analisis"
+                name="analisis"
                 label="Análisis / diagnóstico"
                 value={nota.analisis || nota.diagnostico}
                 onChange={(v) => onNota({ ...nota, analisis: v, diagnostico: v })}
@@ -179,7 +210,7 @@ export default function NoteEditor({
         </SoapCard>
 
         <SoapCard id="soap-p" letter="P" title="Plan" hint="Tratamiento estructurado, seguimiento y evolución">
-          <Area label="Plan terapéutico" value={nota.plan} onChange={(v) => setField('plan', v)} locked={locked} />
+          <Area id="id_del_input_plan" name="plan" label="Plan terapéutico" value={nota.plan} onChange={(v) => setField('plan', v)} locked={locked} />
           <Section title="Receta estructurada">
             {(nota.tratamiento ?? []).map((row, index) => (
               <div key={index} className="grid grid-cols-1 sm:grid-cols-8 gap-2 mb-2">
@@ -313,13 +344,15 @@ function Vital({ label, value, onChange, locked }: { label: string; value: strin
   );
 }
 
-function Area({ id, label, value, onChange, locked, compact }: { id?: string; label: string; value: string; onChange: (v: string) => void; locked: boolean; compact?: boolean }) {
+function Area({ id, name, label, value, onChange, locked, compact }: { id?: string; name?: string; label: string; value: string; onChange: (v: string) => void; locked: boolean; compact?: boolean }) {
   const missing = !value || value === '[NO MENCIONADO]';
   return (
     <div className={clsx(missing ? 'note-section-missing' : 'note-section')}>
       <label className="section-header" htmlFor={id}>{label}</label>
       <textarea
         id={id}
+        name={name}
+        data-soap-key={name}
         className={clsx(
           'w-full p-3 rounded-lg border border-slate-200 text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-teal-500 resize-y disabled:bg-slate-50',
           compact ? 'min-h-[72px]' : 'min-h-[96px]',

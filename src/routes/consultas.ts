@@ -172,16 +172,22 @@ consultaRoutes.post("/texto", async (c) => {
         c.executionCtx
       );
 
-    if (!wantsIaStream(c)) {
-      return c.json(await respuestaConsulta(c.env.SECRET_KEY, await run()), 201);
-    }
-
-    const origin = allowedBrowserOrigin(c.req.header("Origin"), c.req.url, c.env);
-    return sseConsultaResponse(origin, async (send) => {
-      send({ type: "status", step: "sintesis" });
-      const result = await run();
-      send({ type: "complete", ...(await respuestaConsulta(c.env.SECRET_KEY, result)) });
-    });
+    const payload = await respuestaConsulta(c.env.SECRET_KEY, await run());
+    const nota = payload.nota as Record<string, unknown> | undefined;
+    console.log("SOAP WORKER JSON Content-Type: application/json; charset=utf-8");
+    console.log(
+      "SOAP WORKER NOTA SALIDA:",
+      JSON.stringify({
+        motivo_consulta: nota?.motivo_consulta ?? null,
+        padecimiento_actual: nota?.padecimiento_actual ?? null,
+        subjetivo: nota?.subjetivo ?? null,
+        objetivo: nota?.objetivo ?? null,
+        analisis: nota?.analisis ?? null,
+        plan: nota?.plan ?? null,
+        keys: nota ? Object.keys(nota) : [],
+      })
+    );
+    return c.json(payload, 201, { "Content-Type": "application/json; charset=utf-8" });
   } catch (error) {
     return consultaError(c, error, "consulta_texto_failed");
   }

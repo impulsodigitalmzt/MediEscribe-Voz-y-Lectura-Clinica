@@ -111,6 +111,65 @@ export default function ConsultaWorkspace() {
     }));
   }, [user, locked]);
 
+  useEffect(() => {
+    const SOAP_IDS = {
+      motivo_consulta: 'id_del_input_motivo',
+      padecimiento_actual: 'id_del_input_padecimiento',
+      objetivo: 'id_del_input_objetivo',
+      analisis: 'id_del_input_analisis',
+      plan: 'id_del_input_plan',
+    } as const;
+
+    const pintar = (data?: {
+      motivo_consulta?: string;
+      padecimiento_actual?: string;
+      subjetivo?: string;
+      objetivo?: string;
+      analisis?: string;
+      plan?: string;
+    }) => {
+      const payload = {
+        motivo_consulta: data?.motivo_consulta || 'PRUEBA AISLAMIENTO: dolor de garganta',
+        padecimiento_actual: data?.padecimiento_actual || 'PRUEBA AISLAMIENTO: fiebre y odinofagia de 2 días',
+        subjetivo: data?.subjetivo || data?.padecimiento_actual || 'PRUEBA AISLAMIENTO: fiebre y odinofagia de 2 días',
+        objetivo: data?.objetivo || '',
+        analisis: data?.analisis || '',
+        plan: data?.plan || '',
+      };
+      console.log('Asignando a UI (aislamiento):', payload);
+      setNota((prev) => ({
+        ...prev,
+        motivo_consulta: payload.motivo_consulta,
+        padecimiento_actual: payload.padecimiento_actual,
+        subjetivo: payload.subjetivo,
+        objetivo: payload.objetivo || prev.objetivo,
+        exploracion_fisica: payload.objetivo || prev.exploracion_fisica,
+        analisis: payload.analisis || prev.analisis,
+        diagnostico: payload.analisis || prev.diagnostico,
+        plan: payload.plan || prev.plan,
+      }));
+      const resultado = Object.fromEntries(
+        Object.entries(SOAP_IDS).map(([key, id]) => {
+          const el = document.getElementById(id) as HTMLTextAreaElement | null;
+          const valor = payload[key as keyof typeof payload] ?? '';
+          if (el && valor) el.value = valor;
+          return [key, { id, encontrado: Boolean(el), valorDom: el?.value ?? null, name: el?.getAttribute('name') }];
+        }),
+      );
+      console.log('[SOAP aislamiento] DOM tras pintar:', resultado);
+      return resultado;
+    };
+
+    const host = window as Window & { __probarPintadoSoap?: typeof pintar };
+    host.__probarPintadoSoap = pintar;
+    console.info(
+      '[SOAP forense] Prueba de aislamiento lista. Ejecute en esta consola:\n__probarPintadoSoap({ motivo_consulta: "Dolor de garganta", padecimiento_actual: "Fiebre y odinofagia" })',
+    );
+    return () => {
+      delete host.__probarPintadoSoap;
+    };
+  }, []);
+
   const extras = {
     medicoNombre: user?.full_name,
     medicoCedula: user?.credentials,
@@ -153,6 +212,10 @@ export default function ConsultaWorkspace() {
   const asignarSoapAUi = (result: { nota?: NotaClinica | null; consulta?: ConsultaMedica | null }, borrador: string) => {
     const data = extraerSoapDesdeRespuesta(result, borrador);
     console.log('Asignando a UI:', data);
+    console.log('[SOAP auditoría IDs vs llaves]', {
+      motivo_consulta: { id: 'id_del_input_motivo', valor: data.motivo_consulta, el: Boolean(document.getElementById('id_del_input_motivo')) },
+      padecimiento_actual: { id: 'id_del_input_padecimiento', valor: data.padecimiento_actual, el: Boolean(document.getElementById('id_del_input_padecimiento')) },
+    });
     setNota((prev) => ({
       ...prev,
       motivo_consulta: data.motivo_consulta || '',

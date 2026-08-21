@@ -221,5 +221,8 @@ TRANSCRIPCIÓN:
 ${clipped}`,
     },
   ]);
-  return parseSoapClinico(raw);
+  console.log("GROQ OBJETO SOAP CRUDO:", JSON.stringify(raw));
+  const soap = parseSoapClinico(raw);
+  console.log("SOAP TRAS PARSEAR:", JSON.stringify(soap));
+  return soap;
 }

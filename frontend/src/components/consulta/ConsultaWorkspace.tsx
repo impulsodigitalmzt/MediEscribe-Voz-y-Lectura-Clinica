@@ -212,21 +212,42 @@ export default function ConsultaWorkspace() {
     setNota(mapped);
   };
 
+  const setMotivo = (value: string) => {
+    const texto = typeof value === 'string' ? value.trim() : '';
+    if (!texto) {
+      console.log('[SOAP] motivo_consulta vacío: no se sobrescribe el campo');
+      return;
+    }
+    setNota((prev) => ({ ...prev, motivo_consulta: texto }));
+  };
+
+  const setPadecimiento = (value: string) => {
+    const texto = typeof value === 'string' ? value.trim() : '';
+    if (!texto) {
+      console.log('[SOAP] padecimiento_actual vacío: no se sobrescribe el campo');
+      return;
+    }
+    setNota((prev) => ({ ...prev, padecimiento_actual: texto, subjetivo: texto }));
+  };
+
+  const pintarSoapIndependiente = (datos: { motivo_consulta?: string; padecimiento_actual?: string; subjetivo?: string; objetivo?: string; analisis?: string; plan?: string }) => {
+    console.log('Datos listos para pintar:', datos);
+    setMotivo(datos.motivo_consulta || '');
+    setPadecimiento(datos.padecimiento_actual || datos.subjetivo || '');
+    if (typeof datos.objetivo === 'string' && datos.objetivo.trim()) {
+      setNota((prev) => ({ ...prev, objetivo: datos.objetivo!.trim(), exploracion_fisica: datos.objetivo!.trim() }));
+    }
+    if (typeof datos.analisis === 'string' && datos.analisis.trim()) {
+      setNota((prev) => ({ ...prev, analisis: datos.analisis!.trim(), diagnostico: datos.analisis!.trim() }));
+    }
+    if (typeof datos.plan === 'string' && datos.plan.trim()) {
+      setNota((prev) => ({ ...prev, plan: datos.plan!.trim() }));
+    }
+  };
+
   const asignarSoapAUi = (result: { nota?: NotaClinica | null; consulta?: ConsultaMedica | null } | null) => {
-    const soap = extraerSoapDesdeRespuesta(result);
-    console.log('SOAP JSON → UI:', soap);
-    setNota((prev) => ({
-      ...prev,
-      motivo_consulta: soap.motivo_consulta,
-      padecimiento_actual: soap.padecimiento_actual,
-      subjetivo: soap.subjetivo,
-      objetivo: soap.objetivo,
-      exploracion_fisica: soap.objetivo,
-      analisis: soap.analisis,
-      diagnostico: soap.analisis,
-      plan: soap.plan,
-      diagnostico_cie10: soap.analisis ? prev.diagnostico_cie10 : '',
-    }));
+    const datos = extraerSoapDesdeRespuesta(result);
+    pintarSoapIndependiente(datos);
   };
 
   const handleGenerarDesdeTexto = async (textoCaja?: string) => {
@@ -247,7 +268,7 @@ export default function ConsultaWorkspace() {
       setError('Dicte o pegue el contenido de la consulta en el borrador y vuelva a generar.');
       return;
     }
-    console.log('Enviando a IA:', texto);
+    console.log('Iniciando generación SOAP para texto:', texto);
     setDictado(texto);
     setGenerating(true);
     setError('');
@@ -293,6 +314,24 @@ export default function ConsultaWorkspace() {
       setGenerating(false);
     }
   };
+
+  useEffect(() => {
+    const host = window as Window & { probarFlujoManual?: (texto?: string) => Promise<void> };
+    host.probarFlujoManual = async (textoEjemplo?: string) => {
+      const muestra = (textoEjemplo || dictado || 'Hola doctor, me duele la garganta y tengo fiebre de 38').trim();
+      console.log('Iniciando generación SOAP para texto:', muestra);
+      if (!id) {
+        console.warn('[SOAP] probarFlujoManual: no hay consulta abierta.');
+        return;
+      }
+      await handleGenerarDesdeTexto(muestra);
+    };
+    console.info('[SOAP] Prueba de humo lista. En F12 ejecute:\nprobarFlujoManual("me duele la garganta y tengo fiebre de 38")');
+    return () => {
+      delete host.probarFlujoManual;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dictado, id]);
 
   const handleGenerarDesdeAudio = async (file?: File) => {
     if (locked) {

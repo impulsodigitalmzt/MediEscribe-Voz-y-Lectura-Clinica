@@ -188,7 +188,7 @@ consultaRoutes.post("/texto", async (c) => {
         keys: nota ? Object.keys(nota) : [],
       })
     );
-    return c.json(payload, 201, { "Content-Type": "application/json; charset=utf-8" });
+    return c.json(payload, 200, { "Content-Type": "application/json; charset=utf-8" });
   } catch (error) {
     return consultaError(c, error, "consulta_texto_failed");
   }

@@ -71,11 +71,16 @@ export default function VoiceDictationPanel({
   };
 
   const handleGenerarTexto = async () => {
+    const texto = textoCaja.trim();
+    console.log('Iniciando generación SOAP para texto:', texto);
+    if (!texto) {
+      console.warn('[SOAP] El clic sí se registró, pero el borrador está vacío. No hay fetch.');
+    }
     if (capturing) {
       await handleStopAndProcess();
       return;
     }
-    onGenerateText(textoCaja.trim());
+    onGenerateText(texto);
   };
 
   return (

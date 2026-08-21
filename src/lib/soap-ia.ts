@@ -219,33 +219,82 @@ export function aplicarSoapANota(nota: NotaClinica, soap: SoapClinico): NotaClin
   };
 }
 
+async function extraerCampoSecuencial(
+  env: Env,
+  transcripcion: string,
+  campo: "motivo_consulta" | "padecimiento_actual",
+  system: string
+): Promise<string> {
+  console.log(`SOAP paso ${campo}: enviando a Groq`);
+  try {
+    const raw = await groqChatJson(
+      env,
+      [
+        { role: "system", content: system },
+        { role: "user", content: `DICTADO:\n${transcripcion}` },
+      ],
+      { temperature: 0.1, maxTokens: 500, timeoutMs: 16_000, stream: false }
+    );
+    const valor =
+      asText(raw[campo]) ||
+      asText((raw.nota as Record<string, unknown> | undefined)?.[campo]) ||
+      asText(raw.texto) ||
+      asText(raw.content);
+    const limpio = valor && !esRuidoNoClinico(valor) ? valor : "";
+    console.log(`SOAP paso ${campo} listo:`, limpio || "(vacío)");
+    return limpio;
+  } catch (error) {
+    console.error(
+      `SOAP paso ${campo} falló:`,
+      error instanceof Error ? error.message : "error"
+    );
+    return "";
+  }
+}
+
 export async function sintetizarSoapClinico(env: Env, transcripcion: string): Promise<SoapClinico> {
   const clipped = clipTranscript(transcripcion);
   if (!clipped) {
     throw new AppError(400, "La transcripción no puede estar vacía.", "TRANSCRIPT_EMPTY");
   }
+  const vacio = parseSoapClinico({});
   if (esRuidoNoClinico(clipped)) {
-    return parseSoapClinico({});
+    console.log("SOAP secuencial: dictado es ruido, campos vacíos");
+    return vacio;
   }
-  const raw = await groqChatJson(env, [
-    { role: "system", content: SOAP_SYSTEM_PROMPT },
-    {
-      role: "user",
-      content: `Redacta la nota SOAP a partir de este dictado. JSON plano con strings: motivo_consulta, padecimiento_actual, subjetivo, objetivo, analisis, plan.
-
-DICTADO:
-${clipped}`,
-    },
-  ]);
-  console.log("GROQ RAW ANTES DE PARSEAR SOAP:", JSON.stringify(raw));
-  const soap = parseSoapClinico(raw);
-  console.log("SOAP CONTRATO:", JSON.stringify({
+  console.log("SOAP secuencial: inicio, chars=", clipped.length);
+  const motivo_consulta = await extraerCampoSecuencial(
+    env,
+    clipped,
+    "motivo_consulta",
+    `Eres médico redactor. Extrae SOLO el motivo de consulta.
+Devuelve JSON plano: {"motivo_consulta":"..."}.
+El valor es UNA frase clínica corta (2 a 8 palabras), p. ej. "Odinofagia y fiebre".
+No copies el diálogo. Sin saludos. Si no hay clínica, {"motivo_consulta":""}.`
+  );
+  const padecimiento_actual = await extraerCampoSecuencial(
+    env,
+    clipped,
+    "padecimiento_actual",
+    `Eres médico redactor. Extrae SOLO el padecimiento actual.
+Devuelve JSON plano: {"padecimiento_actual":"..."}.
+Redacta en tercera persona, estilo clínico, basado en lo que dijo el paciente.
+Incluye síntomas, tiempo e intensidad referidos. Sin saludos ni transcripción literal.
+Si no hay clínica, {"padecimiento_actual":""}.`
+  );
+  const soap: SoapClinico = {
+    ...vacio,
+    motivo_consulta,
+    padecimiento_actual,
+    subjetivo: padecimiento_actual,
+    objetivo: "",
+    analisis: "",
+    plan: "",
+    plan_tratamiento: "",
+  };
+  console.log("SOAP secuencial terminado:", JSON.stringify({
     motivo_consulta: soap.motivo_consulta,
     padecimiento_actual: soap.padecimiento_actual,
-    subjetivo: soap.subjetivo,
-    objetivo: soap.objetivo,
-    analisis: soap.analisis,
-    plan: soap.plan,
   }));
   return soap;
 }

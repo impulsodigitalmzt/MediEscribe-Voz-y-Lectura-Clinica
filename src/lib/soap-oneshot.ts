@@ -22,7 +22,10 @@ export type SoapOneshot = {
   objetivo: string;
   exploracion_fisica: string;
   analisis: string;
+  pronostico: string;
   plan: string;
+  notas_evolucion: string;
+  seguimiento: string;
   signos_vitales: SignosVitales;
   receta: RecetaOneshot;
 };
@@ -45,7 +48,10 @@ export function soapOneshotVacio(): SoapOneshot {
     objetivo: "",
     exploracion_fisica: "",
     analisis: "",
+    pronostico: "",
     plan: "",
+    notas_evolucion: "",
+    seguimiento: "",
     signos_vitales: vacioSignosVitales(),
     receta: { ...RECETA_VACIA, medicamentos: [] },
   };
@@ -62,7 +68,10 @@ REGLAS:
 6. exploracion_fisica: solo hallazgos explorados o medidos. Los síntomas referidos van en padecimiento_actual.
 7. plan: formal y estructurado (fármaco, dosis, vía, frecuencia, duración; estudios; reposo/hidratación) SOLO con lo dictado.
 8. medicamentos: un item por fármaco recetado. Si no hay, [].
-9. Receta para el paciente: rellena receta.titulo / titulo_receta, receta.resumen / resumen_paciente, receta.indicaciones / indicaciones_receta, alarmas y seguimiento. Si el dictado trae tratamiento, no dejes esos campos vacíos.
+9. pronostico: breve (bueno, reservado, malo o una frase clínica) si el cuadro lo permite. Si no hay base, "".
+10. seguimiento: cita o plazo de revisión dictado (p. ej. "Cita de revisión en 5 días"). Copia el mismo valor en receta.seguimiento.
+11. notas_evolucion: solo si hay evolución o control dictado; si no, "".
+12. Receta para el paciente: no dejes vacíos titulo_receta, resumen_paciente, indicaciones_receta ni alarmas si el dictado trae diagnóstico o tratamiento. También rellena receta.titulo, receta.resumen, receta.indicaciones, receta.alarmas y receta.seguimiento con el mismo contenido.
 
 Llaves EXACTAS:
 {
@@ -83,10 +92,17 @@ Llaves EXACTAS:
   },
   "exploracion_fisica": "",
   "analisis": "",
+  "pronostico": "",
   "plan": "",
+  "notas_evolucion": "",
+  "seguimiento": "",
   "medicamentos": [
     { "medicamento": "", "dosis": "", "via": "", "periodicidad": "", "instruccion": "" }
   ],
+  "titulo_receta": "",
+  "resumen_paciente": "",
+  "indicaciones_receta": "",
+  "alarmas": "",
   "receta": {
     "titulo": "",
     "resumen": "",
@@ -160,6 +176,32 @@ export function normalizarSoapOneshot(raw: Record<string, unknown>): SoapOneshot
     Array.isArray(raw.medicamentos) ? raw.medicamentos : recetaRaw.medicamentos
   );
 
+  const seguimiento =
+    texto(raw.seguimiento)
+    || texto(recetaRaw.seguimiento)
+    || texto(raw.receta_seguimiento)
+    || texto(raw.seguimiento_receta);
+  const alarmas =
+    texto(recetaRaw.alarmas)
+    || texto(raw.alarmas)
+    || texto(raw.receta_alarmas)
+    || texto(recetaRaw.alarmas_receta);
+  const tituloReceta =
+    texto(recetaRaw.titulo)
+    || texto(recetaRaw.titulo_receta)
+    || texto(raw.titulo_receta)
+    || texto(raw.receta_titulo);
+  const resumenPaciente =
+    texto(recetaRaw.resumen)
+    || texto(recetaRaw.resumen_paciente)
+    || texto(raw.resumen_paciente)
+    || texto(raw.receta_resumen);
+  const indicacionesReceta =
+    texto(recetaRaw.indicaciones)
+    || texto(recetaRaw.indicaciones_receta)
+    || texto(raw.indicaciones_receta)
+    || texto(raw.receta_indicaciones);
+
   return {
     motivo_consulta: texto(raw.motivo_consulta) || texto(raw.motivo),
     padecimiento_actual: padecimiento,
@@ -168,35 +210,18 @@ export function normalizarSoapOneshot(raw: Record<string, unknown>): SoapOneshot
     objetivo: exploracion,
     exploracion_fisica: exploracion,
     analisis,
+    pronostico: texto(raw.pronostico) || texto(raw.pronóstico),
     plan: texto(raw.plan) || texto(raw.plan_tratamiento),
+    notas_evolucion: texto(raw.notas_evolucion) || texto(raw.notas_de_evolucion),
+    seguimiento,
     signos_vitales: signos,
     receta: {
-      titulo:
-        texto(recetaRaw.titulo)
-        || texto(recetaRaw.titulo_receta)
-        || texto(raw.titulo_receta)
-        || texto(raw.receta_titulo),
-      resumen:
-        texto(recetaRaw.resumen)
-        || texto(recetaRaw.resumen_paciente)
-        || texto(raw.resumen_paciente)
-        || texto(raw.receta_resumen),
-      indicaciones:
-        texto(recetaRaw.indicaciones)
-        || texto(recetaRaw.indicaciones_receta)
-        || texto(raw.indicaciones_receta)
-        || texto(raw.receta_indicaciones),
+      titulo: tituloReceta,
+      resumen: resumenPaciente,
+      indicaciones: indicacionesReceta,
       medicamentos,
-      alarmas:
-        texto(recetaRaw.alarmas)
-        || texto(raw.alarmas)
-        || texto(raw.receta_alarmas)
-        || texto(recetaRaw.alarmas_receta),
-      seguimiento:
-        texto(recetaRaw.seguimiento)
-        || texto(raw.seguimiento)
-        || texto(raw.receta_seguimiento)
-        || texto(recetaRaw.seguimiento_receta),
+      alarmas,
+      seguimiento,
     },
   };
 }

@@ -202,11 +202,13 @@ async function payloadSoapOneshot(env: Env, texto: string) {
     ...soap,
     motivo: soap.motivo_consulta,
     medicamentos: soap.receta.medicamentos,
+    pronostico: soap.pronostico,
+    notas_evolucion: soap.notas_evolucion,
+    seguimiento: soap.seguimiento || soap.receta.seguimiento,
     titulo_receta: soap.receta.titulo,
     resumen_paciente: soap.receta.resumen,
     indicaciones_receta: soap.receta.indicaciones,
     alarmas: soap.receta.alarmas,
-    seguimiento: soap.receta.seguimiento,
   };
 }
 

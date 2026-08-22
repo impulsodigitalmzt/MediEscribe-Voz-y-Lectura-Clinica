@@ -206,7 +206,7 @@ export default function NoteEditor({
             </label>
           </div>
           <Area label="Diagnóstico presuntivo / diferenciales" value={nota.diagnosticos_diferenciales || nota.diagnostico_presuntivo} onChange={(v) => onNota({ ...nota, diagnosticos_diferenciales: v, diagnostico_presuntivo: v })} locked={locked} compact />
-          <Area label="Pronóstico" value={nota.pronostico} onChange={(v) => setField('pronostico', v)} locked={locked} compact />
+          <Area id="pronostico" name="pronostico" label="Pronóstico" value={nota.pronostico} onChange={(v) => setField('pronostico', v)} locked={locked} compact />
         </SoapCard>
 
         <SoapCard id="soap-p" letter="P" title="Plan" hint="Tratamiento estructurado, seguimiento y evolución">
@@ -231,8 +231,8 @@ export default function NoteEditor({
               </button>
             )}
           </Section>
-          <Area label="Seguimiento" value={nota.seguimiento} onChange={(v) => setField('seguimiento', v)} locked={locked} compact />
-          <Area label="Notas de evolución" value={nota.notas_evolucion} onChange={(v) => setField('notas_evolucion', v)} locked={locked} compact />
+          <Area id="seguimiento" name="seguimiento" label="Seguimiento" value={nota.seguimiento} onChange={(v) => setField('seguimiento', v)} locked={locked} compact />
+          <Area id="notas_evolucion" name="notas_evolucion" label="Notas de evolución" value={nota.notas_evolucion} onChange={(v) => setField('notas_evolucion', v)} locked={locked} compact />
         </SoapCard>
       </div>
 

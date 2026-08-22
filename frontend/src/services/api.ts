@@ -428,7 +428,10 @@ class ApiService {
     objetivo: string;
     exploracion_fisica: string;
     analisis: string;
+    pronostico: string;
     plan: string;
+    notas_evolucion: string;
+    seguimiento: string;
     signos_vitales: {
       ta_sistolica: string;
       ta_diastolica: string;
@@ -467,7 +470,10 @@ class ApiService {
       objetivo: '',
       exploracion_fisica: '',
       analisis: '',
+      pronostico: '',
       plan: '',
+      notas_evolucion: '',
+      seguimiento: '',
       signos_vitales: { ...vacioSignos },
       receta: { ...vacioReceta, medicamentos: [] },
     };
@@ -562,7 +568,10 @@ class ApiService {
         objetivo: textoDe('objetivo', 'exploracion_fisica'),
         exploracion_fisica: textoDe('exploracion_fisica', 'objetivo'),
         analisis: textoDe('analisis', 'diagnostico'),
+        pronostico: textoDe('pronostico', 'pronóstico'),
         plan: textoDe('plan', 'plan_tratamiento'),
+        notas_evolucion: textoDe('notas_evolucion', 'notas_de_evolucion'),
+        seguimiento: recetaMapeada.seguimiento,
         signos_vitales: {
           ta_sistolica: signo('ta_sistolica'),
           ta_diastolica: signo('ta_diastolica'),

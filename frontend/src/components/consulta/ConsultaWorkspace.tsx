@@ -265,7 +265,9 @@ export default function ConsultaWorkspace() {
     objetivo?: string;
     exploracion_fisica?: string;
     analisis?: string;
+    pronostico?: string;
     plan?: string;
+    notas_evolucion?: string;
     signos_vitales?: Partial<SignosVitales>;
     receta?: {
       titulo?: string;
@@ -288,7 +290,9 @@ export default function ConsultaWorkspace() {
     const interrogatorio = campo(soap.interrogatorio);
     const exploracion = campo(soap.exploracion_fisica) || campo(soap.objetivo);
     const analisis = campo(soap.analisis);
+    const pronostico = campo(soap.pronostico);
     const plan = campo(soap.plan);
+    const notasEvolucion = campo(soap.notas_evolucion);
     const recetaIn = soap.receta ?? {};
     const meds = Array.isArray(recetaIn.medicamentos)
       ? recetaIn.medicamentos.filter((row) => row.medicamento?.trim())
@@ -302,6 +306,9 @@ export default function ConsultaWorkspace() {
       medicamentos: meds,
     };
     console.log('[SOAP] Asignación a receta inferior:', recetaPatch);
+    console.log('[SOAP] Pronóstico / seguimiento / evolución:', {
+      pronostico, seguimiento: recetaPatch.seguimiento, notas_evolucion: notasEvolucion,
+    });
 
     let notaAplicada = nota;
     let cuantos = 0;
@@ -331,7 +338,9 @@ export default function ConsultaWorkspace() {
           exploracion_fisica: exploracion || prev.exploracion_fisica,
           analisis: analisis || prev.analisis,
           diagnostico: analisis || prev.diagnostico,
+          pronostico: pronostico || prev.pronostico,
           plan: plan || prev.plan,
+          notas_evolucion: notasEvolucion || prev.notas_evolucion,
           seguimiento: recetaPatch.seguimiento || prev.seguimiento,
           signos_vitales: nextSignos as SignosVitales,
           tratamiento: meds.length
@@ -344,7 +353,7 @@ export default function ConsultaWorkspace() {
             : prev.tratamiento,
         });
         cuantos = [
-          motivo, padecimiento, interrogatorio, exploracion, analisis, plan,
+          motivo, padecimiento, interrogatorio, exploracion, analisis, pronostico, plan, notasEvolucion,
           recetaPatch.titulo, recetaPatch.resumen, recetaPatch.indicaciones,
           recetaPatch.alarmas, recetaPatch.seguimiento,
         ].filter(Boolean).length + Object.values(nextSignos).filter((v) => v && v !== '0').length + meds.length;

@@ -31,26 +31,36 @@ function capitalizarNombre(nombre: string): string {
     .join(' ');
 }
 
-const VIA_ORAL =
-  /\b(?:tomar|t[oó]mese|t[oó]mela|se va a tomar|va a tomar|v[ií]a\s+oral|\bvo\b|tabletas?|c[aá]psulas?|comprimidos?|jarabe)\b/i;
-const VIA_IV = /\b(?:intravenos|endovenos|\bi\.?v\.?\b|\bev\b)\b/i;
-const VIA_IM = /\b(?:intramuscular|\bi\.?m\.?\b)\b/i;
+const CATALOGO_VIAS: Array<{ via: string; re: RegExp }> = [
+  { via: 'oftálmica', re: /oft[aá]lm|colirio|gotas?\s+(?:en\s+)?(?:el\s+|los\s+)?ojos?|en\s+el\s+ojo/i },
+  { via: 'ótica', re: /\b[oó]tic|\bo[ií]do\b|gotas?\s+(?:en\s+)?(?:el\s+)?o[ií]do/i },
+  { via: 'nasal', re: /\bnasal\b|spray\s+nasal|gotas?\s+nasales|por\s+la\s+nariz/i },
+  { via: 'transdérmica', re: /transd[eé]rm|parche/i },
+  { via: 'rectal', re: /\brectal\b|supositorio|enema|por\s+el\s+recto/i },
+  { via: 'sublingual', re: /sublingual|debajo\s+de\s+la\s+lengua/i },
+  { via: 'inhalatoria', re: /inhalat|inhalad|nebuliz|aerosol|inhalador/i },
+  { via: 'tópica', re: /t[oó]pic|crema|gel\b|pomada|ung[uü]ento|aplicar\s+en\s+la\s+piel|sobre\s+la\s+piel/i },
+  { via: 'intravenosa', re: /intraven|endoven|\bi\.?v\.?\b|\bev\b|en\s+la\s+vena/i },
+  { via: 'intramuscular', re: /intramuscular|\bi\.?m\.?\b|en\s+el\s+gl[uú]teo|en\s+el\s+muslo/i },
+  { via: 'subcutánea', re: /subcut[aá]nea|\bs\.?c\.?\b|bajo\s+la\s+piel/i },
+  { via: 'oral', re: /tomar|t[oó]mese|t[oó]mela|se va a tomar|va a tomar|v[ií]a\s+oral|\bvo\b|tabletas?|c[aá]psulas?|comprimidos?|jarabe|por\s+boca/i },
+];
+
+const VIA_ORAL = CATALOGO_VIAS[CATALOGO_VIAS.length - 1].re;
+
+export function catalogarVia(texto: string): string {
+  const fuente = texto ?? '';
+  for (const item of CATALOGO_VIAS) {
+    if (item.re.test(fuente)) return item.via;
+  }
+  return '';
+}
 
 export function inferirViaAdministracion(viaActual: string, contexto: string): string {
-  const actual = (viaActual ?? '').trim();
-  if (actual) {
-    if (/^(vo|v[ií]a\s+oral)$/i.test(actual)) return 'oral';
-    return actual;
-  }
-  const c = contexto ?? '';
-  if (VIA_IV.test(c)) return 'IV';
-  if (VIA_IM.test(c)) return 'IM';
-  if (/\b(?:subcut[aá]nea|\bs\.?c\.?\b)/i.test(c)) return 'subcutánea';
-  if (/\binhal/i.test(c)) return 'inhalada';
-  if (/\bsublingual/i.test(c)) return 'sublingual';
-  if (/\bt[oó]pic/i.test(c)) return 'tópica';
-  if (VIA_ORAL.test(c)) return 'oral';
-  return '';
+  const desdeCampo = catalogarVia(viaActual);
+  if (desdeCampo) return desdeCampo;
+  if ((viaActual ?? '').trim() && !catalogarVia(contexto)) return viaActual.trim();
+  return catalogarVia(contexto);
 }
 
 function ventanaMedicamento(nombre: string, texto: string): string {
@@ -65,16 +75,10 @@ function ventanaMedicamento(nombre: string, texto: string): string {
 export function completarViasMedicamentos<
   T extends { medicamento: string; via: string; dosis?: string; periodicidad?: string },
 >(meds: T[], texto: string): T[] {
-  const hayTomarGlobal = VIA_ORAL.test(texto);
   return meds.map((row) => {
     const ventana = ventanaMedicamento(row.medicamento, texto);
-    let via = inferirViaAdministracion(row.via, `${ventana} ${row.via}`);
-    if (!via && hayTomarGlobal && !VIA_IV.test(ventana) && !VIA_IM.test(ventana)) {
-      via = 'oral';
-    }
-    if (!via && /\bmg\b/i.test(row.dosis ?? '') && (row.periodicidad ?? '').trim() && !VIA_IV.test(ventana) && !VIA_IM.test(ventana)) {
-      via = 'oral';
-    }
+    let via = catalogarVia(row.via) || catalogarVia(ventana);
+    if (!via && VIA_ORAL.test(texto) && !catalogarVia(ventana)) via = 'oral';
     return { ...row, via };
   });
 }

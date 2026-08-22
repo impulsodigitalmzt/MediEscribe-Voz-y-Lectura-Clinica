@@ -1,5 +1,5 @@
 import { groqChatJson } from "./groq";
-import { extraerMedicamentosDeTexto, planDesdeBorrador, completarViasMedicamentos } from "./plan-terapeutico";
+import { extraerMedicamentosDeTexto, planDesdeBorrador, completarViasMedicamentos, inferirViaAdministracion } from "./plan-terapeutico";
 import { vacioSignosVitales, type RecetaPaciente, type SignosVitales } from "./nota-types";
 
 export type MedicamentoOneshot = {
@@ -68,10 +68,28 @@ REGLAS:
 5. Signos vitales: solo números (sin unidades). TA 120/80 → ta_sistolica "120" y ta_diastolica "80". Notación 12/8 → 120 y 80.
 6. exploracion_fisica: solo hallazgos explorados o medidos. Los síntomas referidos van en padecimiento_actual.
 7. Completa TODAS las llaves. Prioriza plan, medicamentos, pronostico, seguimiento y receta (titulo_receta, resumen_paciente, indicaciones_receta, alarmas) si el dictado trae diagnóstico o tratamiento.
-8. medicamentos: un item por fármaco recetado. Si no hay, []. La vía es obligatoria (NOM-004 6.2.6): si el médico dice "tomar", "se va a tomar", tableta o cápsula, via = "oral". IM/IV/SC solo si se dictan.
-9. pronostico: breve (bueno, reservado, malo o una frase clínica) si hay diagnóstico. Si no hay base, "".
-10. seguimiento: cita o plazo de revisión dictado (p. ej. "Cita de revisión en 5 días").
-11. notas_evolucion: solo si hay evolución o control dictado; si no, "".
+8. medicamentos: un item por fármaco recetado. Si no hay, [].
+9. VÍA (obligatoria en cada medicamento, NOM-004 6.2.6). Infierela de ESTA conversación, fármaco por fármaco. No asumas oral si el dictado indica otra vía. Usa EXACTAMENTE uno de estos valores en "via":
+   oral | sublingual | tópica | inhalatoria | rectal | oftálmica | ótica | nasal | intramuscular | intravenosa | subcutánea | transdérmica
+   Pistas conversacionales:
+   - oral: tomar, se va a tomar, tómese, por boca, tableta, cápsula, jarabe
+   - sublingual: debajo de la lengua, sublingual
+   - tópica: crema, gel, pomada, ungüento, aplicar en la piel
+   - inhalatoria: inhalar, nebulizar, aerosol, inhalador
+   - rectal: supositorio, enema
+   - oftálmica: gotas/pomada en los ojos, colirio
+   - ótica: gotas en el oído
+   - nasal: spray o gotas nasales
+   - intramuscular: IM, en el glúteo/muslo
+   - intravenosa: IV, EV, en la vena, endovenoso
+   - subcutánea: SC, bajo la piel
+   - transdérmica: parche
+   Si varios fármacos se recetan para tomar en el mismo párrafo y no cambia la vía, todos van "oral".
+   Ejemplo: "amoxicilina 875 mg, se va a tomar una cada 12 horas" → via="oral". "parche de fentanilo" → via="transdérmica".
+   Nunca dejes "via":"" si recetaste el fármaco y el diálogo permite inferirla.
+10. pronostico: breve (bueno, reservado, malo o una frase clínica) si hay diagnóstico. Si no hay base, "".
+11. seguimiento: cita o plazo de revisión dictado (p. ej. "Cita de revisión en 5 días").
+12. notas_evolucion: solo si hay evolución o control dictado; si no, "".
 
 Llaves EXACTAS (plana, sin objeto receta anidado):
 {
@@ -140,7 +158,7 @@ function medicamentosDe(value: unknown): MedicamentoOneshot[] {
       return {
         medicamento: campo("medicamento") || campo("nombre"),
         dosis: campo("dosis"),
-        via: campo("via") || campo("vía"),
+        via: inferirViaAdministracion(campo("via") || campo("vía"), ""),
         periodicidad: campo("periodicidad") || campo("frecuencia"),
         instruccion: campo("instruccion") || campo("instrucción") || campo("duracion") || campo("duración"),
       };
@@ -304,7 +322,10 @@ export async function extraerSoapOneshot(env: Env, textoBorrador: string): Promi
     env,
     [
       { role: "system", content: SYSTEM_PROMPT },
-      { role: "user", content: texto },
+      {
+        role: "user",
+        content: `Dictado de la consulta. Infiere la vía de CADA medicamento con lo dicho aquí. Valores: oral, sublingual, tópica, inhalatoria, rectal, oftálmica, ótica, nasal, intramuscular, intravenosa, subcutánea, transdérmica. No asumas oral si indica otra vía. No dejes via vacía si recetaste el fármaco.\n\n${texto}`,
+      },
     ],
     { temperature: 0.2, maxTokens: 6000, timeoutMs: 28_000, stream: false }
   );

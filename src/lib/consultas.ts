@@ -1,6 +1,6 @@
 import { closeSql, createSql, type Sql } from "../db.js";
 import { AppError } from "./errors";
-import { transcribeAudio } from "./groq";
+import { modeloGroqChat, transcribeAudio } from "./groq";
 import { ensureExpedienteSchema } from "./expediente-schema";
 import { aplicarIdentidadPaciente, aplicarSelloLegal, notaDesdeExpediente, recetaDesdeNota, redactarNotaClinica, type DatosMedico, type NotaClinica, type RecetaPaciente } from "./nota-clinica";
 import {
@@ -532,7 +532,7 @@ export async function procesarConsultaDesdeTexto(
         idioma,
         especialidad: input.especialidad,
         modeloWhisper: env.GROQ_WHISPER_MODEL || "whisper-large-v3",
-        modeloLlm: env.GROQ_MODEL || "llama-3.3-70b-versatile",
+        modeloLlm: modeloGroqChat(env),
         nombreArchivo: input.nombreArchivo ?? null,
         sesion: input.sesion,
         phiSecret: env.SECRET_KEY,
@@ -547,7 +547,7 @@ export async function procesarConsultaDesdeTexto(
       idioma,
       especialidad: input.especialidad,
       modeloWhisper: env.GROQ_WHISPER_MODEL || "whisper-large-v3",
-      modeloLlm: env.GROQ_MODEL || "llama-3.3-70b-versatile",
+      modeloLlm: modeloGroqChat(env),
       nombreArchivo: input.nombreArchivo ?? null,
       medicoId: input.sesion?.userId ?? null,
       phiSecret: env.SECRET_KEY,

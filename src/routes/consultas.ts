@@ -21,6 +21,8 @@ import {
 } from "../lib/consultas";
 import { exigirPaciente, isUuid, listHistorialPaciente } from "../lib/pacientes";
 import { forzarNotaTextoPlano, type NotaClinica, type RecetaPaciente } from "../lib/nota-clinica";
+import { extraerSoapAislado } from "../lib/motivo-aislado";
+import { modeloGroqChat } from "../lib/groq";
 import { textoCampoClinico } from "../lib/texto-campo";
 import { registrarConsentimientoConsulta } from "../lib/consentimiento";
 import {
@@ -154,7 +156,7 @@ consultaRoutes.post("/texto", async (c) => {
 
     logSinPhi("consulta_texto_start", {
       hasGroqApiKey: Boolean(c.env.GROQ_API_KEY),
-      groqModel: c.env.GROQ_MODEL || "llama-3.3-70b-versatile",
+      groqModel: modeloGroqChat(c.env),
       transcriptChars: transcripcion.trim().length,
       stream: wantsIaStream(c),
     });
@@ -191,6 +193,63 @@ consultaRoutes.post("/texto", async (c) => {
     return c.json(payload, 200, { "Content-Type": "application/json; charset=utf-8" });
   } catch (error) {
     return consultaError(c, error, "consulta_texto_failed");
+  }
+});
+
+consultaRoutes.post("/motivo-aislado", async (c) => {
+  try {
+    if (!c.env.GROQ_API_KEY) {
+      return c.json(
+        {
+          motivo: "",
+          motivo_consulta: "",
+          padecimiento_actual: "",
+          subjetivo: "",
+          objetivo: "",
+          analisis: "",
+          plan: "",
+          signos_vitales: {
+            ta_sistolica: "",
+            ta_diastolica: "",
+            temperatura: "",
+            fc: "",
+            fr: "",
+            spo2: "",
+            peso: "",
+            talla: "",
+            imc: "",
+            glucosa: "",
+          },
+          receta: {
+            titulo: "",
+            resumen: "",
+            indicaciones: "",
+            medicamentos: [],
+            alarmas: "",
+            seguimiento: "",
+          },
+          error: "GROQ_API_KEY no está configurada.",
+        },
+        500
+      );
+    }
+    const body = (await c.req.json<{ texto?: string; transcripcion?: string }>().catch(() => ({}))) as {
+      texto?: string;
+      transcripcion?: string;
+    };
+    const texto = String(body.texto ?? body.transcripcion ?? "").trim();
+    const soap = await extraerSoapAislado(c.env, texto);
+    console.log("Motivo aislado (worker):", soap.motivo_consulta);
+    console.log("SOAP aislado listo (worker):", soap);
+    return c.json(
+      {
+        motivo: soap.motivo_consulta,
+        ...soap,
+      },
+      200
+    );
+  } catch (error) {
+    return consultaError(c, error, "motivo_aislado_failed");
   }
 });
 

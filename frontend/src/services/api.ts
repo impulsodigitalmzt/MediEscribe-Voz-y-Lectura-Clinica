@@ -415,6 +415,149 @@ class ApiService {
     return respuesta;
   }
 
+  async extraerMotivoAislado(texto: string): Promise<string> {
+    const soap = await this.extraerSoapAislado(texto);
+    return soap.motivo_consulta;
+  }
+
+  async extraerSoapAislado(texto: string): Promise<{
+    motivo_consulta: string;
+    padecimiento_actual: string;
+    subjetivo: string;
+    objetivo: string;
+    analisis: string;
+    plan: string;
+    signos_vitales: {
+      ta_sistolica: string;
+      ta_diastolica: string;
+      temperatura: string;
+      fc: string;
+      fr: string;
+      spo2: string;
+      peso: string;
+      talla: string;
+      imc: string;
+      glucosa: string;
+    };
+    receta: {
+      titulo: string;
+      resumen: string;
+      indicaciones: string;
+      medicamentos: Array<{ medicamento: string; dosis: string; via: string; periodicidad: string; instruccion: string }>;
+      alarmas: string;
+      seguimiento: string;
+    };
+  }> {
+    const vacioSignos = {
+      ta_sistolica: '', ta_diastolica: '', temperatura: '', fc: '', fr: '',
+      spo2: '', peso: '', talla: '', imc: '', glucosa: '',
+    };
+    const vacioReceta = {
+      titulo: '', resumen: '', indicaciones: '', medicamentos: [] as Array<{
+        medicamento: string; dosis: string; via: string; periodicidad: string; instruccion: string;
+      }>, alarmas: '', seguimiento: '',
+    };
+    const vacio = {
+      motivo_consulta: '',
+      padecimiento_actual: '',
+      subjetivo: '',
+      objetivo: '',
+      analisis: '',
+      plan: '',
+      signos_vitales: { ...vacioSignos },
+      receta: { ...vacioReceta, medicamentos: [] },
+    };
+    const token = this.getAccessToken();
+    const response = await fetch(`${API_BASE}/api/consultas-medicas/motivo-aislado`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({ texto }),
+      signal: AbortSignal.timeout(90_000),
+    });
+    const raw = await response.text();
+    console.log('[SOAP aislado] HTTP', response.status, raw);
+    if (!response.ok) {
+      throw new Error(raw.slice(0, 400) || 'No se pudo sintetizar el SOAP.');
+    }
+    try {
+      const json = JSON.parse(raw) as Record<string, unknown>;
+      const textoDe = (...keys: string[]) => {
+        for (const key of keys) {
+          const value = json[key];
+          if (typeof value === 'string' && value.trim()) return value.trim();
+        }
+        return '';
+      };
+      const signosRaw = json.signos_vitales && typeof json.signos_vitales === 'object'
+        ? json.signos_vitales as Record<string, unknown>
+        : {};
+      const recetaRaw = json.receta && typeof json.receta === 'object'
+        ? json.receta as Record<string, unknown>
+        : {};
+      const signo = (key: string) => {
+        const value = signosRaw[key];
+        return typeof value === 'string' && value.trim() && value.trim() !== '0' ? value.trim() : '';
+      };
+      const recetaTexto = (key: string) => {
+        const value = recetaRaw[key];
+        return typeof value === 'string' ? value.trim() : '';
+      };
+      const medsRaw = recetaRaw.medicamentos;
+      const medicamentos = Array.isArray(medsRaw)
+        ? medsRaw
+          .map((item) => {
+            const row = item && typeof item === 'object' ? item as Record<string, unknown> : {};
+            const t = (k: string) => typeof row[k] === 'string' ? row[k].trim() : '';
+            return {
+              medicamento: t('medicamento') || t('nombre'),
+              dosis: t('dosis'),
+              via: t('via') || t('vía'),
+              periodicidad: t('periodicidad') || t('frecuencia'),
+              instruccion: t('instruccion') || t('duracion') || t('duración'),
+            };
+          })
+          .filter((row) => row.medicamento)
+        : [];
+      const soap = {
+        motivo_consulta: textoDe('motivo_consulta', 'motivo'),
+        padecimiento_actual: textoDe('padecimiento_actual'),
+        subjetivo: textoDe('subjetivo', 'padecimiento_actual'),
+        objetivo: textoDe('objetivo'),
+        analisis: textoDe('analisis'),
+        plan: textoDe('plan'),
+        signos_vitales: {
+          ta_sistolica: signo('ta_sistolica'),
+          ta_diastolica: signo('ta_diastolica'),
+          temperatura: signo('temperatura'),
+          fc: signo('fc'),
+          fr: signo('fr'),
+          spo2: signo('spo2'),
+          peso: signo('peso'),
+          talla: signo('talla'),
+          imc: signo('imc'),
+          glucosa: signo('glucosa'),
+        },
+        receta: {
+          titulo: recetaTexto('titulo'),
+          resumen: recetaTexto('resumen'),
+          indicaciones: recetaTexto('indicaciones'),
+          medicamentos,
+          alarmas: recetaTexto('alarmas'),
+          seguimiento: recetaTexto('seguimiento'),
+        },
+      };
+      console.log('SOAP aislado recibido:', soap);
+      return soap;
+    } catch {
+      const plano = raw.trim();
+      return { ...vacio, motivo_consulta: plano };
+    }
+  }
+
   async getConsulta(id: string): Promise<ConsultaMedica> {
     const token = this.getAccessToken();
     const response = await fetch(`${API_BASE}/api/consultas-medicas/${id}`, {

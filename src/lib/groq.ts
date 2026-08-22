@@ -34,6 +34,30 @@ const LANGUAGE_NAMES: Record<string, string> = {
   ar: "Arabic", zh: "Mandarin Chinese", hi: "Hindi", sw: "Swahili",
 };
 
+/** Groq apagó llama-3.3-70b-versatile el 2026-08-16 (404 model_not_found). */
+export const GROQ_CHAT_URL = "https://api.groq.com/openai/v1/chat/completions";
+export const DEFAULT_GROQ_CHAT_MODEL = "openai/gpt-oss-120b";
+
+const MODELOS_GROQ_RETIRADOS = new Set([
+  "llama-3.3-70b-versatile",
+  "llama-3.1-8b-instant",
+  "llama-3.1-70b-versatile",
+  "llama3-70b-8192",
+  "llama3-8b-8192",
+]);
+
+export function modeloGroqChat(env: Env): string {
+  const configured = (env.GROQ_MODEL || "").trim();
+  if (!configured || MODELOS_GROQ_RETIRADOS.has(configured)) {
+    return DEFAULT_GROQ_CHAT_MODEL;
+  }
+  return configured;
+}
+
+function snippetErrorGroq(text: string): string {
+  return text.replace(/\s+/g, " ").trim().slice(0, 220);
+}
+
 export type PolishedNote = Record<string, unknown>;
 
 export type GroqChatMessage = {
@@ -53,7 +77,8 @@ function logGroq(event: string, payload: Record<string, unknown>): void {
 function groqKeyMeta(env: Env): Record<string, unknown> {
   return {
     hasGroqApiKey: Boolean(env.GROQ_API_KEY),
-    groqModel: env.GROQ_MODEL || "llama-3.3-70b-versatile",
+    groqModel: modeloGroqChat(env),
+    groqModelConfigured: env.GROQ_MODEL || "",
   };
 }
 
@@ -125,12 +150,10 @@ export async function groqChatJson(
     throw new AppError(503, "GROQ_API_KEY no está configurada.", "GROQ_NOT_CONFIGURED");
   }
 
-  const model = env.GROQ_MODEL || "llama-3.3-70b-versatile";
+  const model = modeloGroqChat(env);
   let maxTokens = maxTokensForModel(model, options?.maxTokens);
   let payload = messages;
   const userChars = messages.find((m) => m.role === "user")?.content.length ?? 0;
-  const groqUrl = "https://api.groq.com/openai/v1/chat/completions";
-  let omitirStore = false;
   let useStream = options?.stream !== false;
   const timeoutMs = options?.timeoutMs ?? GROQ_CHAT_TIMEOUT_MS;
 
@@ -140,23 +163,25 @@ export async function groqChatJson(
     userChars,
     messageCount: messages.length,
     stream: useStream,
-    privacy: { store: false, training: "forbidden" },
   });
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const body: Record<string, unknown> = {
       model,
       temperature: options?.temperature ?? 0.2,
-      max_tokens: maxTokens,
+      max_completion_tokens: maxTokens,
       response_format: { type: "json_object" },
       messages: payload,
       stream: useStream,
     };
-    if (!omitirStore) body.store = false;
+    if (/gpt-oss/i.test(model)) {
+      body.reasoning_effort = "low";
+      body.include_reasoning = false;
+    }
 
     let response: Response;
     try {
-      response = await fetch(groqUrl, {
+      response = await fetch(GROQ_CHAT_URL, {
         method: "POST",
         headers: groqPrivacyHeaders(env),
         body: JSON.stringify(body),
@@ -182,10 +207,10 @@ export async function groqChatJson(
         httpStatus: response.status,
         attempt,
         bodyChars: errText.length,
+        groqError: snippetErrorGroq(errText),
       });
       if ((response.status === 400 || response.status === 413) && attempt === 0) {
         if (response.status === 400) {
-          omitirStore = true;
           useStream = false;
         }
         if (response.status === 413) {
@@ -266,6 +291,68 @@ export async function groqChatJson(
   }
 
   throw new AppError(502, "No se pudo redactar la nota médica con Groq.", "GROQ_CHAT_FAILED");
+}
+
+/** Chat Groq de texto plano: sin JSON schema, sin stream, un solo string. */
+export async function groqChatPlainText(
+  env: Env,
+  messages: GroqChatMessage[],
+  options?: { temperature?: number; maxTokens?: number; timeoutMs?: number }
+): Promise<string> {
+  if (!env.GROQ_API_KEY) {
+    throw new AppError(503, "GROQ_API_KEY no está configurada.", "GROQ_NOT_CONFIGURED");
+  }
+
+  const model = modeloGroqChat(env);
+  const timeoutMs = options?.timeoutMs ?? GROQ_CHAT_TIMEOUT_MS;
+  const maxTokens = Math.min(Math.max(options?.maxTokens ?? 512, 256), 1024);
+  const body: Record<string, unknown> = {
+    model,
+    temperature: options?.temperature ?? 0.2,
+    max_completion_tokens: maxTokens,
+    messages,
+    stream: false,
+  };
+  if (/gpt-oss/i.test(model)) {
+    body.reasoning_effort = "low";
+    body.include_reasoning = false;
+  }
+
+  logGroq("groq_plain_request", {
+    ...groqKeyMeta(env),
+    groqUrl: GROQ_CHAT_URL,
+    maxTokens,
+  });
+
+  let response: Response;
+  try {
+    response = await fetch(GROQ_CHAT_URL, {
+      method: "POST",
+      headers: groqPrivacyHeaders(env),
+      body: JSON.stringify(body),
+      signal: fetchTimeout(timeoutMs),
+    });
+  } catch (error) {
+    if (isTimeoutError(error)) throw groqTimeoutError("chat");
+    throw error;
+  }
+
+  if (!response.ok) {
+    const errText = await response.text();
+    logGroq("groq_plain_failed", {
+      ...groqKeyMeta(env),
+      groqUrl: GROQ_CHAT_URL,
+      httpStatus: response.status,
+      groqError: snippetErrorGroq(errText),
+    });
+    throw new AppError(502, "No se pudo extraer el motivo de consulta.", "GROQ_CHAT_FAILED");
+  }
+
+  const data = (await response.json()) as {
+    choices?: Array<{ message?: { content?: string; reasoning?: string } }>;
+  };
+  const message = data.choices?.[0]?.message;
+  return (message?.content || message?.reasoning || "").trim();
 }
 
 export async function polishNote(

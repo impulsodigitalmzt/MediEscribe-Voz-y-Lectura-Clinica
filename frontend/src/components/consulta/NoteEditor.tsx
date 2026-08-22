@@ -150,16 +150,16 @@ export default function NoteEditor({
               <Activity className="w-3.5 h-3.5" /> Signos vitales
             </p>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-              <Vital label="TA sis" value={signos.ta_sistolica} onChange={(v) => setSigno('ta_sistolica', v)} locked={locked} />
-              <Vital label="TA dia" value={signos.ta_diastolica} onChange={(v) => setSigno('ta_diastolica', v)} locked={locked} />
-              <Vital label="Temp °C" value={signos.temperatura} onChange={(v) => setSigno('temperatura', v)} locked={locked} />
-              <Vital label="FC lpm" value={signos.fc} onChange={(v) => setSigno('fc', v)} locked={locked} />
-              <Vital label="FR rpm" value={signos.fr} onChange={(v) => setSigno('fr', v)} locked={locked} />
-              <Vital label="SpO2 %" value={signos.spo2} onChange={(v) => setSigno('spo2', v)} locked={locked} />
-              <Vital label="Peso kg" value={signos.peso} onChange={(v) => setSigno('peso', v)} locked={locked} />
-              <Vital label="Talla cm" value={signos.talla} onChange={(v) => setSigno('talla', v)} locked={locked} />
-              <Vital label="IMC" value={signos.imc} onChange={(v) => setSigno('imc', v)} locked={locked} />
-              <Vital label="Glucosa" value={signos.glucosa} onChange={(v) => setSigno('glucosa', v)} locked={locked} />
+              <Vital id="ta_sistolica" label="TA sis" value={signos.ta_sistolica} onChange={(v) => setSigno('ta_sistolica', v)} locked={locked} />
+              <Vital id="ta_diastolica" label="TA dia" value={signos.ta_diastolica} onChange={(v) => setSigno('ta_diastolica', v)} locked={locked} />
+              <Vital id="temperatura" label="Temp °C" value={signos.temperatura} onChange={(v) => setSigno('temperatura', v)} locked={locked} />
+              <Vital id="fc" label="FC lpm" value={signos.fc} onChange={(v) => setSigno('fc', v)} locked={locked} />
+              <Vital id="fr" label="FR rpm" value={signos.fr} onChange={(v) => setSigno('fr', v)} locked={locked} />
+              <Vital id="spo2" label="SpO2 %" value={signos.spo2} onChange={(v) => setSigno('spo2', v)} locked={locked} />
+              <Vital id="peso" label="Peso kg" value={signos.peso} onChange={(v) => setSigno('peso', v)} locked={locked} />
+              <Vital id="talla" label="Talla cm" value={signos.talla} onChange={(v) => setSigno('talla', v)} locked={locked} />
+              <Vital id="imc" label="IMC" value={signos.imc} onChange={(v) => setSigno('imc', v)} locked={locked} />
+              <Vital id="glucosa" label="Glucosa" value={signos.glucosa} onChange={(v) => setSigno('glucosa', v)} locked={locked} />
             </div>
             {imcClase ? (
               <p className={clsx(
@@ -272,9 +272,9 @@ export default function NoteEditor({
             <Copy className="w-3.5 h-3.5" /> Copiar
           </button>
         </div>
-        <Area label="Título" value={receta.titulo} onChange={(v) => onReceta({ ...receta, titulo: v })} locked={locked} compact />
-        <Area label="Resumen para el paciente" value={receta.resumen} onChange={(v) => onReceta({ ...receta, resumen: v })} locked={locked} compact />
-        <Area label="Indicaciones" value={receta.indicaciones} onChange={(v) => onReceta({ ...receta, indicaciones: v })} locked={locked} compact />
+        <Area id="receta_titulo" name="receta_titulo" label="Título" value={receta.titulo} onChange={(v) => onReceta({ ...receta, titulo: v })} locked={locked} compact />
+        <Area id="receta_resumen" name="receta_resumen" label="Resumen para el paciente" value={receta.resumen} onChange={(v) => onReceta({ ...receta, resumen: v })} locked={locked} compact />
+        <Area id="receta_indicaciones" name="receta_indicaciones" label="Indicaciones" value={receta.indicaciones} onChange={(v) => onReceta({ ...receta, indicaciones: v })} locked={locked} compact />
         <Section title="Medicamentos">
           {(receta.medicamentos ?? []).map((row, index) => (
             <div key={index} className="grid grid-cols-1 gap-2 mb-2">
@@ -303,8 +303,8 @@ export default function NoteEditor({
             </button>
           )}
         </Section>
-        <Area label="Alarmas / cuándo regresar" value={receta.alarmas} onChange={(v) => onReceta({ ...receta, alarmas: v })} locked={locked} compact />
-        <Area label="Seguimiento" value={receta.seguimiento} onChange={(v) => onReceta({ ...receta, seguimiento: v })} locked={locked} compact />
+        <Area id="receta_alarmas" name="receta_alarmas" label="Alarmas / cuándo regresar" value={receta.alarmas} onChange={(v) => onReceta({ ...receta, alarmas: v })} locked={locked} compact />
+        <Area id="receta_seguimiento" name="receta_seguimiento" label="Seguimiento" value={receta.seguimiento} onChange={(v) => onReceta({ ...receta, seguimiento: v })} locked={locked} compact />
         <p className="text-xs font-semibold text-slate-800 border-t border-slate-100 pt-3">{sello}</p>
       </div>
     </div>
@@ -335,11 +335,11 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
   );
 }
 
-function Vital({ label, value, onChange, locked }: { label: string; value: string; onChange: (v: string) => void; locked: boolean }) {
+function Vital({ id, label, value, onChange, locked }: { id?: string; label: string; value: string; onChange: (v: string) => void; locked: boolean }) {
   return (
     <label className="block">
       <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">{label}</span>
-      <input className="input-field py-1.5 text-sm" value={value} disabled={locked} onChange={(e) => onChange(e.target.value)} inputMode="decimal" />
+      <input id={id} name={id} className="input-field py-1.5 text-sm" value={value} disabled={locked} onChange={(e) => onChange(e.target.value)} inputMode="decimal" />
     </label>
   );
 }

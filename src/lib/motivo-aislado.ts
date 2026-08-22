@@ -94,6 +94,21 @@ function calcImc(peso: string, talla: string): string {
   return (kg / (metros * metros)).toFixed(2);
 }
 
+const CONCURRENCIA_GROQ = 4;
+
+async function ejecutarEnLotes<T>(tareas: Array<() => Promise<T>>, tamano = CONCURRENCIA_GROQ): Promise<T[]> {
+  const resultados: T[] = [];
+  for (let i = 0; i < tareas.length; i += tamano) {
+    if (i > 0) {
+      await new Promise((resolve) => setTimeout(resolve, 180));
+    }
+    const lote = tareas.slice(i, i + tamano);
+    const parte = await Promise.all(lote.map((tarea) => tarea()));
+    resultados.push(...parte);
+  }
+  return resultados;
+}
+
 async function extraerCampoIndependiente(
   env: Env,
   textoBorrador: string,
@@ -101,8 +116,8 @@ async function extraerCampoIndependiente(
   system: string,
   maxLen: number
 ): Promise<string> {
-  try {
-    const crudo = await groqChatPlainText(
+  const pedir = () =>
+    groqChatPlainText(
       env,
       [
         { role: "system", content: system },
@@ -110,6 +125,18 @@ async function extraerCampoIndependiente(
       ],
       { temperature: 0.2, maxTokens: 1024, timeoutMs: 16_000 }
     );
+  try {
+    let crudo = "";
+    try {
+      crudo = await pedir();
+    } catch (error) {
+      console.error(
+        `SOAP aislado ${campo} reintento:`,
+        error instanceof Error ? error.message : "error"
+      );
+      await new Promise((resolve) => setTimeout(resolve, 700));
+      crudo = await pedir();
+    }
     const valor = limpiarTextoPlano(crudo, [campo, campo.replace(/^receta_/, ""), "texto", "content"], maxLen);
     console.log(`SOAP aislado ${campo}:`, valor || "(vacío)");
     return valor;
@@ -128,8 +155,8 @@ async function extraerVitalIndependiente(
   campo: CampoVital,
   system: string
 ): Promise<string> {
-  try {
-    const crudo = await groqChatPlainText(
+  const pedir = () =>
+    groqChatPlainText(
       env,
       [
         { role: "system", content: system },
@@ -137,6 +164,18 @@ async function extraerVitalIndependiente(
       ],
       { temperature: 0.2, maxTokens: 512, timeoutMs: 16_000 }
     );
+  try {
+    let crudo = "";
+    try {
+      crudo = await pedir();
+    } catch (error) {
+      console.error(
+        `Signo vital aislado ${campo} reintento:`,
+        error instanceof Error ? error.message : "error"
+      );
+      await new Promise((resolve) => setTimeout(resolve, 700));
+      crudo = await pedir();
+    }
     const valor = limpiarNumeroVital(crudo, campo);
     console.log(`Signo vital aislado ${campo}:`, valor || "(vacío)");
     return valor;
@@ -340,26 +379,26 @@ export async function extraerSoapAislado(env: Env, textoBorrador: string): Promi
   const camposVital = Object.keys(PROMPTS_VITAL) as Array<Exclude<CampoVital, "imc">>;
   const camposReceta = Object.keys(PROMPTS_RECETA) as Array<"titulo" | "resumen" | "indicaciones">;
 
-  const [valoresSoap, valoresVital, valoresReceta, medicamentos, alarmas, seguimiento] = await Promise.all([
-    Promise.all(
-      camposSoap.map((campo) => {
-        const spec = PROMPTS_SOAP[campo];
-        return extraerCampoIndependiente(env, texto, campo, spec.system, spec.maxLen);
-      })
-    ),
-    Promise.all(
-      camposVital.map((campo) => extraerVitalIndependiente(env, texto, campo, PROMPTS_VITAL[campo]))
-    ),
-    Promise.all(
-      camposReceta.map((campo) => {
-        const spec = PROMPTS_RECETA[campo];
-        return extraerCampoIndependiente(env, texto, `receta_${campo}`, spec.system, spec.maxLen);
-      })
-    ),
+  const valoresSoap = await ejecutarEnLotes(
+    camposSoap.map((campo) => {
+      const spec = PROMPTS_SOAP[campo];
+      return () => extraerCampoIndependiente(env, texto, campo, spec.system, spec.maxLen);
+    })
+  );
+  const valoresReceta = await ejecutarEnLotes(
+    camposReceta.map((campo) => {
+      const spec = PROMPTS_RECETA[campo];
+      return () => extraerCampoIndependiente(env, texto, `receta_${campo}`, spec.system, spec.maxLen);
+    })
+  );
+  const [medicamentos, alarmas, seguimiento] = await Promise.all([
     extraerMedicamentosIndependiente(env, texto),
     extraerAlarmasAisladas(env, texto),
     extraerSeguimientoAislado(env, texto),
   ]);
+  const valoresVital = await ejecutarEnLotes(
+    camposVital.map((campo) => () => extraerVitalIndependiente(env, texto, campo, PROMPTS_VITAL[campo]))
+  );
 
   const soap: SoapAislado = {
     ...SOAP_VACIO,

@@ -476,7 +476,7 @@ class ApiService {
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
       body: JSON.stringify({ texto }),
-      signal: AbortSignal.timeout(90_000),
+      signal: AbortSignal.timeout(120_000),
     });
     const raw = await response.text();
     console.log('[SOAP aislado] HTTP', response.status, raw);

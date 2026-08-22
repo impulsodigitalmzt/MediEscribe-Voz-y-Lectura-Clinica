@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
@@ -48,6 +48,7 @@ export default function ConsultaWorkspace() {
   const [saving, setSaving] = useState(false);
   const [finalizing, setFinalizing] = useState(false);
   const [generating, setGenerating] = useState(false);
+  const generatingRef = useRef(false);
   const [error, setError] = useState('');
   const [savedMsg, setSavedMsg] = useState('');
   const [dictado, setDictado] = useState('');
@@ -256,153 +257,114 @@ export default function ConsultaWorkspace() {
     pintarSoapIndependiente(datos);
   };
 
-  const pintarCampoSoap = (
-    id: string,
-    respuesta: string,
-    etiqueta: string,
-    patch: (prev: NotaClinica, texto: string) => NotaClinica,
-  ) => {
-    console.log(`${etiqueta}:`, respuesta);
-    const texto = typeof respuesta === 'string' ? respuesta.trim() : '';
-    if (!texto) {
-      console.log(`[SOAP] ${id} vacío: no se sobrescribe el campo`);
-      return false;
-    }
-    flushSync(() => {
-      setNota((prev) => patch(prev, texto));
-    });
-    const el = document.getElementById(id) as HTMLTextAreaElement | null;
-    if (el) el.value = texto;
-    else console.warn(`[SOAP] No se encontró #${id} en el DOM`);
-    return true;
-  };
-
-  const pintarSoapAislado = (soap: {
+  const aplicarSoapEnUnaPasada = (soap: {
     motivo_consulta?: string;
     padecimiento_actual?: string;
     subjetivo?: string;
     objetivo?: string;
     analisis?: string;
     plan?: string;
+    signos_vitales?: Partial<SignosVitales>;
+    receta?: {
+      titulo?: string;
+      resumen?: string;
+      indicaciones?: string;
+      medicamentos?: RecetaPaciente['medicamentos'];
+      alarmas?: string;
+      seguimiento?: string;
+    };
   }) => {
     console.log('Datos listos para pintar:', soap);
-    const pintados: string[] = [];
-    if (pintarCampoSoap('motivo_consulta', soap.motivo_consulta || '', 'Motivo aislado', (prev, texto) => ({
-      ...prev,
-      motivo_consulta: texto,
-    }))) pintados.push('motivo_consulta');
-    const padecimiento = (soap.padecimiento_actual || soap.subjetivo || '').trim();
-    if (pintarCampoSoap('padecimiento_actual', padecimiento, 'Padecimiento aislado', (prev, texto) => ({
-      ...prev,
-      padecimiento_actual: texto,
-      subjetivo: texto,
-    }))) pintados.push('padecimiento_actual');
-    if (pintarCampoSoap('objetivo', soap.objetivo || '', 'Objetivo aislado', (prev, texto) => ({
-      ...prev,
-      objetivo: texto,
-      exploracion_fisica: texto,
-    }))) pintados.push('objetivo');
-    if (pintarCampoSoap('analisis', soap.analisis || '', 'Análisis aislado', (prev, texto) => ({
-      ...prev,
-      analisis: texto,
-      diagnostico: texto,
-    }))) pintados.push('analisis');
-    if (pintarCampoSoap('plan', soap.plan || '', 'Plan aislado', (prev, texto) => ({
-      ...prev,
-      plan: texto,
-    }))) pintados.push('plan');
-    console.log('[SOAP] Campos pintados:', pintados);
-    return pintados.length;
-  };
-
-  const pintarSignosAislados = (signos?: Partial<SignosVitales>) => {
-    if (!signos) return 0;
-    console.log('Signos vitales aislados:', signos);
+    const texto = (value?: string) => (typeof value === 'string' ? value.trim() : '');
+    const motivo = texto(soap.motivo_consulta);
+    const padecimiento = texto(soap.padecimiento_actual) || texto(soap.subjetivo);
+    const objetivo = texto(soap.objetivo);
+    const analisis = texto(soap.analisis);
+    const plan = texto(soap.plan);
     const keys: Array<keyof SignosVitales> = [
       'ta_sistolica', 'ta_diastolica', 'temperatura', 'fc', 'fr', 'spo2', 'peso', 'talla', 'imc', 'glucosa',
     ];
-    const patch: Partial<SignosVitales> = {};
+    const signosPatch: Partial<SignosVitales> = {};
     for (const key of keys) {
-      const valor = typeof signos[key] === 'string' ? signos[key]!.trim() : '';
-      console.log(`Signo aislado ${key}:`, valor || '(vacío)');
-      if (!valor || valor === '0') {
-        console.log(`[SOAP] ${key} vacío: no se sobrescribe el campo`);
-        continue;
-      }
-      patch[key] = valor;
-      const el = document.getElementById(key) as HTMLInputElement | null;
-      if (el) el.value = valor;
+      const valor = texto(soap.signos_vitales?.[key]);
+      if (valor && valor !== '0') signosPatch[key] = valor;
     }
-    if (Object.keys(patch).length === 0) return 0;
+    const recetaIn = soap.receta;
+    const recetaPatch: Partial<RecetaPaciente> = {};
+    if (recetaIn) {
+      const titulo = texto(recetaIn.titulo);
+      const resumen = texto(recetaIn.resumen);
+      const indicaciones = texto(recetaIn.indicaciones);
+      const alarmas = texto(recetaIn.alarmas);
+      const seguimiento = texto(recetaIn.seguimiento);
+      if (titulo) recetaPatch.titulo = titulo;
+      if (resumen) recetaPatch.resumen = resumen;
+      if (indicaciones) recetaPatch.indicaciones = indicaciones;
+      if (alarmas) recetaPatch.alarmas = alarmas;
+      if (seguimiento) recetaPatch.seguimiento = seguimiento;
+      const meds = Array.isArray(recetaIn.medicamentos)
+        ? recetaIn.medicamentos.filter((row) => row.medicamento?.trim())
+        : [];
+      if (meds.length) recetaPatch.medicamentos = meds;
+    }
+
+    let notaAplicada = nota;
+    let cuantos = 0;
     flushSync(() => {
       setNota((prev) => {
-        const nextSignos = { ...(prev.signos_vitales ?? {}), ...patch };
+        const nextSignos = { ...(prev.signos_vitales ?? {}), ...signosPatch };
         const kg = Number.parseFloat((nextSignos.peso || '').replace(',', '.'));
         const cm = Number.parseFloat((nextSignos.talla || '').replace(',', '.'));
         if (Number.isFinite(kg) && Number.isFinite(cm) && kg > 0 && cm > 0) {
           const metros = cm > 3 ? cm / 100 : cm;
           nextSignos.imc = (kg / (metros * metros)).toFixed(2);
         }
-        return { ...prev, signos_vitales: nextSignos as SignosVitales };
-      });
-    });
-    return Object.keys(patch).length;
-  };
-
-  const pintarRecetaAislada = (recetaIn?: {
-    titulo?: string;
-    resumen?: string;
-    indicaciones?: string;
-    medicamentos?: RecetaPaciente['medicamentos'];
-    alarmas?: string;
-    seguimiento?: string;
-  }) => {
-    if (!recetaIn) return 0;
-    console.log('Receta aislada:', recetaIn);
-    let cuantos = 0;
-    const aplicarTexto = (id: string, key: 'titulo' | 'resumen' | 'indicaciones' | 'alarmas' | 'seguimiento', etiqueta: string) => {
-      const valor = typeof recetaIn[key] === 'string' ? recetaIn[key]!.trim() : '';
-      console.log(`${etiqueta}:`, valor || '(vacío)');
-      if (!valor) {
-        console.log(`[SOAP] ${id} vacío: no se sobrescribe el campo`);
-        return;
-      }
-      flushSync(() => {
-        setReceta((prev) => ({ ...prev, [key]: valor }));
-      });
-      const el = document.getElementById(id) as HTMLTextAreaElement | null;
-      if (el) el.value = valor;
-      cuantos += 1;
-    };
-    aplicarTexto('receta_titulo', 'titulo', 'Receta título aislado');
-    aplicarTexto('receta_resumen', 'resumen', 'Receta resumen aislado');
-    aplicarTexto('receta_indicaciones', 'indicaciones', 'Receta indicaciones aislado');
-    aplicarTexto('receta_alarmas', 'alarmas', 'Alarmas aisladas');
-    aplicarTexto('receta_seguimiento', 'seguimiento', 'Seguimiento aislado');
-    const meds = Array.isArray(recetaIn.medicamentos)
-      ? recetaIn.medicamentos.filter((row) => row.medicamento?.trim())
-      : [];
-    console.log('Receta medicamentos aislados:', meds.length ? meds : '(vacío)');
-    if (meds.length) {
-      flushSync(() => {
-        setReceta((prev) => ({ ...prev, medicamentos: meds }));
-        setNota((prev) => ({
-          ...prev,
-          tratamiento: meds.map((row) => ({
+        const tratamiento = recetaPatch.medicamentos?.length
+          ? recetaPatch.medicamentos.map((row) => ({
             medicamento: row.medicamento,
             dosis: row.dosis,
             via: row.via,
             periodicidad: row.periodicidad,
-          })),
-        }));
+          }))
+          : prev.tratamiento;
+        const next = asegurarNotaStrings({
+          ...prev,
+          motivo_consulta: motivo || prev.motivo_consulta,
+          padecimiento_actual: padecimiento || prev.padecimiento_actual,
+          subjetivo: padecimiento || prev.subjetivo,
+          objetivo: objetivo || prev.objetivo,
+          exploracion_fisica: objetivo || prev.exploracion_fisica,
+          analisis: analisis || prev.analisis,
+          diagnostico: analisis || prev.diagnostico,
+          plan: plan || prev.plan,
+          signos_vitales: nextSignos as SignosVitales,
+          tratamiento,
+        });
+        cuantos =
+          Number(Boolean(motivo))
+          + Number(Boolean(padecimiento))
+          + Number(Boolean(objetivo))
+          + Number(Boolean(analisis))
+          + Number(Boolean(plan))
+          + Object.keys(signosPatch).length
+          + Object.keys(recetaPatch).length;
+        notaAplicada = next;
+        return next;
       });
-      cuantos += 1;
-    }
+      if (Object.keys(recetaPatch).length) {
+        setReceta((prev) => ({ ...prev, ...recetaPatch }));
+      }
+    });
+    setGuardia(validarNotaNom004(notaAplicada));
     return cuantos;
   };
 
   const handleGenerarDesdeTexto = async (textoCaja?: string) => {
     const texto = (textoCaja ?? dictado).trim();
+    if (generatingRef.current) {
+      console.warn('[SOAP] Generación en curso: se ignora el clic extra.');
+      return;
+    }
     if (locked) {
       setError('La consulta está bloqueada. Use una nota de aclaración.');
       return;
@@ -420,36 +382,14 @@ export default function ConsultaWorkspace() {
       return;
     }
     console.log('Iniciando generación SOAP para texto:', texto);
+    generatingRef.current = true;
     setDictado(texto);
     setGenerating(true);
     setError('');
     setSavedMsg('');
     try {
       const soap = await api.extraerSoapAislado(texto);
-      const cuantosSoap = pintarSoapAislado(soap);
-      const cuantosSignos = pintarSignosAislados(soap.signos_vitales);
-      const cuantosReceta = pintarRecetaAislada(soap.receta);
-      const cuantos = cuantosSoap + cuantosSignos + cuantosReceta;
-      setGuardia(validarNotaNom004(asegurarNotaStrings({
-        ...nota,
-        motivo_consulta: soap.motivo_consulta || nota.motivo_consulta,
-        padecimiento_actual: soap.padecimiento_actual || soap.subjetivo || nota.padecimiento_actual,
-        subjetivo: soap.padecimiento_actual || soap.subjetivo || nota.subjetivo,
-        objetivo: soap.objetivo || nota.objetivo,
-        exploracion_fisica: soap.objetivo || nota.exploracion_fisica,
-        analisis: soap.analisis || nota.analisis,
-        diagnostico: soap.analisis || nota.diagnostico,
-        plan: soap.plan || nota.plan,
-        signos_vitales: { ...(nota.signos_vitales ?? {}), ...(soap.signos_vitales ?? {}) },
-        tratamiento: (soap.receta?.medicamentos?.length
-          ? soap.receta.medicamentos.map((row) => ({
-            medicamento: row.medicamento,
-            dosis: row.dosis,
-            via: row.via,
-            periodicidad: row.periodicidad,
-          }))
-          : nota.tratamiento),
-      })));
+      const cuantos = aplicarSoapEnUnaPasada(soap);
       if (cuantos > 0) {
         setSavedMsg('Nota SOAP sintetizada. Revise S-O-A-P; los campos sin dato clínico quedaron vacíos.');
       } else {
@@ -459,6 +399,7 @@ export default function ConsultaWorkspace() {
       console.error('[SOAP aislado] fallo:', err);
       setError(err instanceof Error ? err.message : 'No se pudo sintetizar el SOAP.');
     } finally {
+      generatingRef.current = false;
       setGenerating(false);
     }
   };
@@ -499,7 +440,12 @@ export default function ConsultaWorkspace() {
       setError('Seleccione un archivo de audio.');
       return;
     }
+    if (generatingRef.current) {
+      console.warn('[SOAP] Generación en curso: se ignora el audio extra.');
+      return;
+    }
     setAudioFile(audio);
+    generatingRef.current = true;
     setGenerating(true);
     setError('');
     setSavedMsg('');
@@ -539,6 +485,7 @@ export default function ConsultaWorkspace() {
       }
       setError(err instanceof Error ? err.message : 'No se pudo procesar el audio.');
     } finally {
+      generatingRef.current = false;
       setGenerating(false);
     }
   };
@@ -678,6 +625,16 @@ export default function ConsultaWorkspace() {
           {error && (
             <div className="no-print flex items-center gap-2 p-2.5 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs">
               <AlertCircle className="w-4 h-4 flex-shrink-0" /> {error}
+            </div>
+          )}
+          {generating && (
+            <div
+              role="status"
+              aria-live="polite"
+              className="no-print sticky top-[57px] z-20 flex items-center gap-2 p-3 rounded-xl bg-teal-50 border border-teal-200 text-teal-950 text-sm font-semibold shadow-sm"
+            >
+              <Loader2 className="w-4 h-4 animate-spin flex-shrink-0" />
+              Analizando consulta...
             </div>
           )}
           {savedMsg && (

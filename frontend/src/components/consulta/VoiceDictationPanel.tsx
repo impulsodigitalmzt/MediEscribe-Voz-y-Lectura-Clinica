@@ -73,6 +73,10 @@ export default function VoiceDictationPanel({
   const handleGenerarSoap = (event?: MouseEvent<HTMLButtonElement>) => {
     event?.preventDefault();
     event?.stopPropagation();
+    if (generating) {
+      console.warn('[SOAP] Analizando consulta: se ignora el clic extra.');
+      return;
+    }
     const texto = (textoCaja || dictadoRef.current || '').trim();
     console.log('Iniciando generación SOAP para texto:', texto);
     if (!texto) {
@@ -155,10 +159,21 @@ export default function VoiceDictationPanel({
           value={textoCaja}
           onChange={(e) => onDictado(e.target.value)}
           placeholder="Lo que dicte o escriba aparece aquí. Puede editarlo antes de generar el SOAP."
-          className="w-full min-h-[140px] p-3 rounded-lg border border-slate-200 text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-teal-500 bg-white"
+          className="w-full min-h-[140px] p-3 rounded-lg border border-slate-200 text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-teal-500 bg-white disabled:bg-slate-50"
           aria-label="Borrador de transcripción"
+          disabled={generating}
         />
       </label>
+      {generating ? (
+        <div
+          role="status"
+          aria-live="polite"
+          className="flex items-center gap-2 p-3 rounded-xl bg-teal-50 border border-teal-200 text-teal-950 text-sm font-semibold"
+        >
+          <Loader2 className="w-4 h-4 animate-spin flex-shrink-0" />
+          Analizando consulta...
+        </div>
+      ) : null}
       <div className="flex flex-wrap gap-2 items-center">
         <button type="button" className="btn-secondary py-2 px-4 text-sm" disabled={!audioFile || generating} onClick={() => onGenerateAudio()}>
           {generating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Mic className="w-3.5 h-3.5" />}
@@ -167,12 +182,13 @@ export default function VoiceDictationPanel({
         <button
           type="button"
           id="btn-generar-soap-texto"
-          className="btn-primary py-2.5 px-5 text-sm font-semibold relative z-20"
+          className="btn-primary py-2.5 px-5 text-sm font-semibold relative z-20 disabled:opacity-70 disabled:cursor-wait"
           aria-busy={generating}
+          disabled={generating}
           onClick={handleGenerarSoap}
         >
           {generating ? <Loader2 className="w-4 h-4 animate-spin pointer-events-none" /> : <FileText className="w-4 h-4 pointer-events-none" />}
-          {generating ? 'Sintetizando nota…' : 'Generar SOAP desde texto'}
+          {generating ? 'Analizando consulta...' : 'Generar SOAP desde texto'}
         </button>
       </div>
     </section>

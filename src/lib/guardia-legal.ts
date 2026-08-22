@@ -55,6 +55,15 @@ export function estaVacio(value: unknown): boolean {
   return VACIO.test(value.trim());
 }
 
+/** Cédula mexicana (dígitos) o credencial local alfanumérica (p. ej. MD). */
+export function cedulaProfesionalValida(raw: unknown): boolean {
+  const texto = String(raw ?? "").trim();
+  if (!texto || VACIO.test(texto) || /^sin c[eé]dula$/i.test(texto)) return false;
+  const compacto = texto.replace(/[\s.\-_/]/g, "");
+  if (compacto.length < 2 || compacto.length > 32) return false;
+  return /^[A-Za-zÁÉÍÓÚÜáéíóúüÑñ0-9]+$/.test(compacto);
+}
+
 function faltante(campo: string, mensaje: string, numeral: string): FaltanteNom004 {
   return { campo, mensaje, numeral };
 }
@@ -119,10 +128,10 @@ export function validarNotaNom004(nota: NotaClinica): DictamenNom004 {
   if (estaVacio(nota.motivo_consulta)) {
     faltantes.push(faltante("motivo_consulta", "Falta el motivo de consulta", "6.1.1 / 7.1.3"));
   }
-  if (estaVacio(nota.exploracion_fisica)) {
+  if (estaVacio(nota.exploracion_fisica) && estaVacio(nota.objetivo)) {
     faltantes.push(faltante("exploracion_fisica", "Falta la exploración física", "6.1.2 / 6.2.2"));
   }
-  if (estaVacio(nota.diagnostico) && estaVacio(nota.diagnostico_presuntivo)) {
+  if (estaVacio(nota.diagnostico) && estaVacio(nota.diagnostico_presuntivo) && estaVacio(nota.analisis)) {
     faltantes.push(faltante("diagnostico", "Falta el diagnóstico o problema clínico", "6.1.4 / 6.2.4"));
   }
   if (estaVacio(nota.pronostico)) {
@@ -132,11 +141,15 @@ export function validarNotaNom004(nota: NotaClinica): DictamenNom004 {
   if (estaVacio(nota.medico_nombre)) {
     faltantes.push(faltante("medico_nombre", "Falta el nombre completo del médico tratante", "5.10 / Apéndice D3.11"));
   }
-  if (estaVacio(nota.medico_cedula)) {
-    faltantes.push(faltante("medico_cedula", "Falta la cédula profesional", "Apéndice D2.11 / D3.11"));
-  } else if (!/\d{5,}/.test(String(nota.medico_cedula))) {
+  if (estaVacio(nota.medico_cedula) || !cedulaProfesionalValida(nota.medico_cedula)) {
     faltantes.push(
-      faltante("medico_cedula", "La cédula profesional debe contener al menos 5 dígitos", "Apéndice D3.11")
+      faltante(
+        "medico_cedula",
+        estaVacio(nota.medico_cedula)
+          ? "Falta la cédula profesional"
+          : "La cédula profesional no es válida. Use dígitos, letras o una abreviatura local (p. ej. MD).",
+        "Apéndice D2.11 / D3.11"
+      )
     );
   }
   if (estaVacio(nota.sello_responsable) || !/Responsable:/i.test(nota.sello_responsable) || !/Cédula:/i.test(nota.sello_responsable)) {
@@ -172,7 +185,7 @@ export function validarNotaNom004(nota: NotaClinica): DictamenNom004 {
       faltantes.push(faltante("plan", "Falta el plan terapéutico", "6.1.6 / 6.2.6"));
     } else {
       const mencionaMed = planMencionaMedicamento(plan);
-      if (mencionaMed || true) {
+      if (mencionaMed) {
         if (!planTieneDosis(plan)) {
           faltantes.push(faltante("plan.dosis", "Falta la dosis del medicamento", "6.2.6"));
         }

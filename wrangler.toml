@@ -5,7 +5,7 @@
 #
 # Dashboard Workers & Pages (integración Git):
 #   Build command:      npm run build
-#   Output directory:   public
+#   Output directory:   dist/client
 #   Root directory:     /
 #   Node version:       20
 #
@@ -32,7 +32,9 @@ compatibility_date = "2026-08-16"
 compatibility_flags = ["nodejs_compat"]
 
 [assets]
-directory = "./public"
+# SPA compilada (Vite → dist/client). No usar ./public ni un subdirectorio
+# llamado "assets": en Windows Wrangler lo estatúa como 128 TiB y falla.
+directory = "./dist/client"
 binding = "ASSETS"
 not_found_handling = "single-page-application"
 # El Worker decide: /api /webhook /health → Hono; el resto → SPA.

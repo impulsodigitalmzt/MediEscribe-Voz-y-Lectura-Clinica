@@ -8,6 +8,7 @@
   },
   "scripts": {
     "dev": "wrangler dev",
+    "predev": "node -e \"require('fs').existsSync('dist/client/index.html')||require('child_process').execSync('npm run build:vite --prefix frontend',{stdio:'inherit'})\"",
     "dev:frontend": "npm run dev --prefix frontend",
     "build": "npm install --prefix frontend && npm run build --prefix frontend",
     "build:vite": "npm run build --prefix frontend",

@@ -6,9 +6,11 @@ export default defineConfig({
   plugins: [react()],
   base: '/',
   build: {
-    outDir: path.resolve(__dirname, '../public'),
+    outDir: path.resolve(__dirname, '../dist/client'),
     emptyOutDir: true,
-    assetsDir: 'assets',
+    // No usar el nombre "assets": en Windows Wrangler trata public/assets
+    // como un archivo de 128 TiB y aborta `wrangler dev`.
+    assetsDir: 'static',
     target: 'es2020',
     sourcemap: false,
     cssCodeSplit: true,

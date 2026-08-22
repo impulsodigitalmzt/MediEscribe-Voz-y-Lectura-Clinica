@@ -13,6 +13,7 @@ import NoteEditor from './NoteEditor';
 import ConsentimientoInformado from './ConsentimientoInformado';
 import { stampMexicoNow } from '../../utils';
 import { asegurarNotaStrings, extraerSoapDesdeRespuesta, mapearNotaDesdeIA, notaClinicaVacia, transcripcionPlana } from '../../lib/mapearNotaClinica';
+import { validarNotaNom004 } from '../../lib/validarNom004';
 
 const EMPTY_NOTA: NotaClinica = notaClinicaVacia();
 
@@ -99,6 +100,10 @@ export default function ConsultaWorkspace() {
   const consentimientoListo = Boolean(
     consulta?.consentimiento_informado_aceptado && consulta?.consentimiento_ia_aceptado
   );
+
+  useEffect(() => {
+    setGuardia(validarNotaNom004(nota));
+  }, [nota]);
 
   useEffect(() => {
     if (!user || locked) return;
@@ -381,6 +386,15 @@ export default function ConsultaWorkspace() {
     if (meds.length) {
       flushSync(() => {
         setReceta((prev) => ({ ...prev, medicamentos: meds }));
+        setNota((prev) => ({
+          ...prev,
+          tratamiento: meds.map((row) => ({
+            medicamento: row.medicamento,
+            dosis: row.dosis,
+            via: row.via,
+            periodicidad: row.periodicidad,
+          })),
+        }));
       });
       cuantos += 1;
     }
@@ -416,6 +430,26 @@ export default function ConsultaWorkspace() {
       const cuantosSignos = pintarSignosAislados(soap.signos_vitales);
       const cuantosReceta = pintarRecetaAislada(soap.receta);
       const cuantos = cuantosSoap + cuantosSignos + cuantosReceta;
+      setGuardia(validarNotaNom004(asegurarNotaStrings({
+        ...nota,
+        motivo_consulta: soap.motivo_consulta || nota.motivo_consulta,
+        padecimiento_actual: soap.padecimiento_actual || soap.subjetivo || nota.padecimiento_actual,
+        subjetivo: soap.padecimiento_actual || soap.subjetivo || nota.subjetivo,
+        objetivo: soap.objetivo || nota.objetivo,
+        exploracion_fisica: soap.objetivo || nota.exploracion_fisica,
+        analisis: soap.analisis || nota.analisis,
+        diagnostico: soap.analisis || nota.diagnostico,
+        plan: soap.plan || nota.plan,
+        signos_vitales: { ...(nota.signos_vitales ?? {}), ...(soap.signos_vitales ?? {}) },
+        tratamiento: (soap.receta?.medicamentos?.length
+          ? soap.receta.medicamentos.map((row) => ({
+            medicamento: row.medicamento,
+            dosis: row.dosis,
+            via: row.via,
+            periodicidad: row.periodicidad,
+          }))
+          : nota.tratamiento),
+      })));
       if (cuantos > 0) {
         setSavedMsg('Nota SOAP sintetizada. Revise S-O-A-P; los campos sin dato clínico quedaron vacíos.');
       } else {

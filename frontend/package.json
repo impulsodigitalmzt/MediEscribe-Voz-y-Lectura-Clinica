@@ -8,8 +8,8 @@
   },
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build --outDir ../public --emptyOutDir",
-    "build:vite": "vite build --outDir ../public --emptyOutDir",
+    "build": "tsc && vite build --outDir ../dist/client --emptyOutDir",
+    "build:vite": "vite build --outDir ../dist/client --emptyOutDir",
     "preview": "vite preview",
     "lint": "eslint . --ext ts,tsx"
   },

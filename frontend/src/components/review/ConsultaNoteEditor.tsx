@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { useAuth } from '../../hooks/useAuth';
 import api, { ConsultaValidacionError } from '../../services/api';
 import type { ConsultaHistorialItem, ConsultaMedica, DictamenNom004, NotaAclaracion, NotaClinica, RecetaPaciente } from '../../types';
-import { validarNotaNom004 } from '../../lib/validarNom004';
+import { validarNotaNom004, fusionarIdentidadPaciente } from '../../lib/validarNom004';
 import {
   AlertCircle, AlertTriangle, ArrowLeft, CheckCircle2, Copy, Download, FileText, Loader2, Mic, Plus, Printer, Save, Trash2, Upload,
 } from 'lucide-react';
@@ -77,7 +77,7 @@ export default function ConsultaNoteEditor() {
         incoming.medico_especialidad
       );
     }
-    setNota(incoming);
+    setNota(fusionarIdentidadPaciente(incoming, row.paciente, row.paciente_nombre));
     setReceta({
       ...EMPTY_RECETA,
       ...(row.receta_paciente_nativo ?? {}),
@@ -101,8 +101,8 @@ export default function ConsultaNoteEditor() {
   const pacienteId = consulta?.paciente_id || consulta?.paciente?.id || '';
 
   useEffect(() => {
-    setGuardia(validarNotaNom004(nota));
-  }, [nota]);
+    setGuardia(validarNotaNom004(nota, consulta?.paciente, consulta?.paciente_nombre));
+  }, [nota, consulta?.paciente, consulta?.paciente_nombre]);
 
   useEffect(() => {
     if (!user || locked) return;

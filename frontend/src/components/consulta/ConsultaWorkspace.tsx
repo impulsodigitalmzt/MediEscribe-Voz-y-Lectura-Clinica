@@ -13,7 +13,7 @@ import NoteEditor from './NoteEditor';
 import ConsentimientoInformado from './ConsentimientoInformado';
 import { stampMexicoNow } from '../../utils';
 import { asegurarNotaStrings, extraerSoapDesdeRespuesta, mapearNotaDesdeIA, notaClinicaVacia, transcripcionPlana } from '../../lib/mapearNotaClinica';
-import { validarNotaNom004 } from '../../lib/validarNom004';
+import { validarNotaNom004, fusionarIdentidadPaciente } from '../../lib/validarNom004';
 import { completarRecetaDesdeSoap } from '../../lib/completarReceta';
 import { asegurarPlanYMedicamentos } from '../../lib/completarPlan';
 
@@ -79,7 +79,7 @@ export default function ConsultaWorkspace() {
         incoming.medico_especialidad
       );
     }
-    setNota(incoming);
+    setNota(fusionarIdentidadPaciente(incoming, row.paciente, row.paciente_nombre));
     setReceta({
       ...EMPTY_RECETA,
       ...(row.receta_paciente_nativo ?? {}),
@@ -105,8 +105,8 @@ export default function ConsultaWorkspace() {
   );
 
   useEffect(() => {
-    setGuardia(validarNotaNom004(nota));
-  }, [nota]);
+    setGuardia(validarNotaNom004(nota, consulta?.paciente, consulta?.paciente_nombre));
+  }, [nota, consulta?.paciente, consulta?.paciente_nombre]);
 
   useEffect(() => {
     if (!user || locked) return;
@@ -340,7 +340,7 @@ export default function ConsultaWorkspace() {
           const metros = cm > 3 ? cm / 100 : cm;
           nextSignos.imc = (kg / (metros * metros)).toFixed(2);
         }
-        const next = asegurarNotaStrings({
+        const next = fusionarIdentidadPaciente(asegurarNotaStrings({
           ...prev,
           motivo_consulta: motivo || prev.motivo_consulta,
           padecimiento_actual: padecimiento || prev.padecimiento_actual,
@@ -363,7 +363,7 @@ export default function ConsultaWorkspace() {
               periodicidad: row.periodicidad,
             }))
             : prev.tratamiento,
-        });
+        }), consulta?.paciente, consulta?.paciente_nombre);
         cuantos = [
           motivo, padecimiento, interrogatorio, exploracion, analisis, pronosticoPintar, plan, notasEvolucion,
           recetaPatch.titulo, recetaPatch.resumen, recetaPatch.indicaciones,
@@ -382,7 +382,7 @@ export default function ConsultaWorkspace() {
         medicamentos: meds.length ? meds : prev.medicamentos,
       }));
     });
-    setGuardia(validarNotaNom004(notaAplicada));
+    setGuardia(validarNotaNom004(notaAplicada, consulta?.paciente, consulta?.paciente_nombre));
     return cuantos;
   };
 

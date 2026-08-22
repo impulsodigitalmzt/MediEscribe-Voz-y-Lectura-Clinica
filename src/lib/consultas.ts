@@ -181,7 +181,9 @@ export async function publicConsulta(
     consentimiento_version: row.consentimiento_version ?? "",
     finalizada_en:
       row.finalizada_en instanceof Date ? row.finalizada_en.toISOString() : row.finalizada_en ?? null,
-    guardia_legal: nota ? validarNotaNom004(nota) : undefined,
+    guardia_legal: nota
+      ? validarNotaNom004(paciente ? aplicarIdentidadPaciente(nota, paciente) : nota)
+      : undefined,
     historial: [],
     aclaraciones: [],
   };

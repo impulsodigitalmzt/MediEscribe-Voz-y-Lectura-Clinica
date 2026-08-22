@@ -1,4 +1,5 @@
 import type { RecetaPaciente } from '../types';
+import { extraerMedicamentosDeTexto } from './completarPlan';
 
 function texto(value?: string): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -12,27 +13,6 @@ function frasesPorPatron(raw: string, patron: RegExp): string {
   const matches = raw.match(patron);
   if (!matches?.length) return '';
   return matches.map((item) => item.trim()).filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
-}
-
-function medicamentosDesdePlan(plan: string): RecetaPaciente['medicamentos'] {
-  const filas: RecetaPaciente['medicamentos'] = [];
-  const patron =
-    /([A-ZÁÉÍÓÚÑÜa-záéíóúñü][\wÁÉÍÓÚÑÜáéíóúñü/.-]*(?:\s+[A-ZÁÉÍÓÚÑÜa-záéíóúñü][\wÁÉÍÓÚÑÜáéíóúñü/.-]*){0,5})\s+(\d+(?:[.,]\d+)?\s*(?:mg|mcg|µg|g|ml|ui))\b(?:[^.\n]*?\b(v[ií]a\s+)?(oral|vo|ev|i\.?v\.?|i\.?m\.?|s\.?c\.?|t[oó]pica|sublingual))?(?:[^.\n]*?\b(cada\s+\d+\s*(?:horas?|hrs?|h)|c\/\s*\d+))?(?:[^.\n]*?\b(por\s+\d+\s*d[ií]as?))?/gi;
-  let match = patron.exec(plan);
-  while (match) {
-    const medicamento = (match[1] ?? '').replace(/^(?:indicar|indicarle|dar|darle|tomar|recetar)\s+/i, '').trim();
-    if (medicamento) {
-      filas.push({
-        medicamento,
-        dosis: (match[2] ?? '').trim(),
-        via: (match[4] ?? '').trim(),
-        periodicidad: (match[5] ?? '').trim(),
-        instruccion: (match[6] ?? '').trim(),
-      });
-    }
-    match = patron.exec(plan);
-  }
-  return filas;
 }
 
 /** Completa la receta inferior si Groq dejó un campo vacío pero el SOAP/borrador ya lo dicen. */
@@ -84,8 +64,8 @@ export function completarRecetaDesdeSoap(input: {
     const dx = primeraFrase(analisis);
     receta.resumen = [dx ? `Le diagnosticaron ${dx}.` : '', receta.indicaciones || plan].filter(Boolean).join(' ').slice(0, 800);
   }
-  if (!receta.medicamentos.length && plan) {
-    receta.medicamentos = medicamentosDesdePlan(plan);
+  if (!receta.medicamentos.length) {
+    receta.medicamentos = extraerMedicamentosDeTexto(`${plan}\n${fuente}`);
   }
   return receta;
 }

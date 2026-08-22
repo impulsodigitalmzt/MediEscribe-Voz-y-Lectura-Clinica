@@ -15,6 +15,7 @@ import { stampMexicoNow } from '../../utils';
 import { asegurarNotaStrings, extraerSoapDesdeRespuesta, mapearNotaDesdeIA, notaClinicaVacia, transcripcionPlana } from '../../lib/mapearNotaClinica';
 import { validarNotaNom004 } from '../../lib/validarNom004';
 import { completarRecetaDesdeSoap } from '../../lib/completarReceta';
+import { asegurarPlanYMedicamentos } from '../../lib/completarPlan';
 
 const EMPTY_NOTA: NotaClinica = notaClinicaVacia();
 
@@ -281,17 +282,19 @@ export default function ConsultaWorkspace() {
     const padecimiento = texto(soap.padecimiento_actual) || texto(soap.subjetivo);
     const objetivo = texto(soap.objetivo);
     const analisis = texto(soap.analisis);
-    const plan = texto(soap.plan);
-    const keys: Array<keyof SignosVitales> = [
-      'ta_sistolica', 'ta_diastolica', 'temperatura', 'fc', 'fr', 'spo2', 'peso', 'talla', 'imc', 'glucosa',
-    ];
-    const signosPatch: Partial<SignosVitales> = {};
-    for (const key of keys) {
-      const valor = texto(soap.signos_vitales?.[key]);
-      if (valor && valor !== '0') signosPatch[key] = valor;
-    }
+    const planYMeds = asegurarPlanYMedicamentos({
+      plan: texto(soap.plan),
+      medicamentos: soap.receta?.medicamentos,
+      borrador: dictado,
+    });
+    const plan = planYMeds.plan;
+    console.log('Plan aislado:', plan || '(vacío)');
+    console.log('Receta aislada medicamentos:', planYMeds.medicamentos.length ? planYMeds.medicamentos : '(vacío)');
     const recetaCompleta = completarRecetaDesdeSoap({
-      receta: soap.receta,
+      receta: {
+        ...(soap.receta ?? {}),
+        medicamentos: planYMeds.medicamentos.length ? planYMeds.medicamentos : soap.receta?.medicamentos,
+      },
       analisis,
       plan,
       borrador: dictado,
@@ -307,21 +310,33 @@ export default function ConsultaWorkspace() {
     if (recetaCompleta.indicaciones) recetaPatch.indicaciones = recetaCompleta.indicaciones;
     if (recetaCompleta.alarmas) recetaPatch.alarmas = recetaCompleta.alarmas;
     if (recetaCompleta.seguimiento) recetaPatch.seguimiento = recetaCompleta.seguimiento;
-    if (recetaCompleta.medicamentos.length) recetaPatch.medicamentos = recetaCompleta.medicamentos;
+    if (planYMeds.medicamentos.length) recetaPatch.medicamentos = planYMeds.medicamentos;
+    else if (recetaCompleta.medicamentos.length) recetaPatch.medicamentos = recetaCompleta.medicamentos;
 
     let notaAplicada = nota;
     let cuantos = 0;
     flushSync(() => {
       setNota((prev) => {
-        const nextSignos = { ...(prev.signos_vitales ?? {}), ...signosPatch };
+        const conservar = (entrante: string, actual?: string) => ((actual ?? '').trim() ? actual! : entrante);
+        const signosPrev = prev.signos_vitales ?? {};
+        const nextSignos = { ...signosPrev };
+        const vitalKeys: Array<keyof SignosVitales> = [
+          'ta_sistolica', 'ta_diastolica', 'temperatura', 'fc', 'fr', 'spo2', 'peso', 'talla', 'imc', 'glucosa',
+        ];
+        for (const key of vitalKeys) {
+          const actual = texto(signosPrev[key]);
+          const valor = texto(soap.signos_vitales?.[key]);
+          if (!actual && valor && valor !== '0') nextSignos[key] = valor;
+        }
         const kg = Number.parseFloat((nextSignos.peso || '').replace(',', '.'));
         const cm = Number.parseFloat((nextSignos.talla || '').replace(',', '.'));
         if (Number.isFinite(kg) && Number.isFinite(cm) && kg > 0 && cm > 0) {
           const metros = cm > 3 ? cm / 100 : cm;
           nextSignos.imc = (kg / (metros * metros)).toFixed(2);
         }
-        const tratamiento = recetaPatch.medicamentos?.length
-          ? recetaPatch.medicamentos.map((row) => ({
+        const meds = recetaPatch.medicamentos ?? [];
+        const tratamiento = meds.length
+          ? meds.map((row) => ({
             medicamento: row.medicamento,
             dosis: row.dosis,
             via: row.via,
@@ -330,11 +345,11 @@ export default function ConsultaWorkspace() {
           : prev.tratamiento;
         const next = asegurarNotaStrings({
           ...prev,
-          motivo_consulta: motivo || prev.motivo_consulta,
-          padecimiento_actual: padecimiento || prev.padecimiento_actual,
-          subjetivo: padecimiento || prev.subjetivo,
-          objetivo: objetivo || prev.objetivo,
-          exploracion_fisica: objetivo || prev.exploracion_fisica,
+          motivo_consulta: conservar(motivo, prev.motivo_consulta),
+          padecimiento_actual: conservar(padecimiento, prev.padecimiento_actual),
+          subjetivo: conservar(padecimiento, prev.subjetivo),
+          objetivo: conservar(objetivo, prev.objetivo),
+          exploracion_fisica: conservar(objetivo, prev.exploracion_fisica),
           analisis: analisis || prev.analisis,
           diagnostico: analisis || prev.diagnostico,
           plan: plan || prev.plan,
@@ -343,12 +358,9 @@ export default function ConsultaWorkspace() {
           tratamiento,
         });
         cuantos =
-          Number(Boolean(motivo))
-          + Number(Boolean(padecimiento))
-          + Number(Boolean(objetivo))
+          Number(Boolean(plan))
+          + Number(Boolean(meds.length))
           + Number(Boolean(analisis))
-          + Number(Boolean(plan))
-          + Object.keys(signosPatch).length
           + Object.keys(recetaPatch).length;
         notaAplicada = next;
         return next;

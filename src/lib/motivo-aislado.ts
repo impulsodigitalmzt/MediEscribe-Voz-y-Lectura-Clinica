@@ -1,5 +1,6 @@
 import { groqChatPlainText } from "./groq";
 import { vacioSignosVitales, type RecetaPaciente, type SignosVitales } from "./nota-types";
+import { extraerMedicamentosDeTexto, planDesdeBorrador } from "./plan-terapeutico";
 
 export type RecetaAislada = Pick<
   RecetaPaciente,
@@ -281,10 +282,14 @@ Ejemplo de estilo: Bronquitis aguda (con sospecha de progresión a neumonía lev
   plan: {
     maxLen: 1600,
     system: `${TONO_SOAP}
-Campo: Plan.
-Redacta el plan formal SOLO con lo dictado, en este orden si existe: tratamiento farmacológico (fármaco, dosis, vía, frecuencia y duración), estudios de gabinete, medidas generales (reposo, hidratación) y mención de seguimiento o alarmas si se dictaron.
-No inventes antibióticos, dosis ni radiografías.
-Si no hay plan, receta ni indicaciones, cadena vacía.`,
+Campo: Plan terapéutico.
+Redacta un plan formal y estructurado, en frases clínicas (sin diálogo). Si el dictado menciona tratamiento, NO lo dejes vacío: reformúlalo.
+Orden si el dato consta:
+1) Un renglón por fármaco: nombre, dosis, vía, frecuencia y duración.
+2) Estudios de gabinete solicitados.
+3) Medidas generales (reposo, hidratación).
+Ejemplo: Amoxicilina/ácido clavulánico 875 mg vía oral cada 12 horas por 7 días. Paracetamol 500 mg vía oral cada 8 horas. Radiografía de tórax de control. Reposo en casa y abundante hidratación.
+No inventes fármacos, dosis ni estudios que no estén en el dictado.`,
   },
 };
 
@@ -384,25 +389,30 @@ function frasesPorPatron(texto: string, patron: RegExp): string {
   return limpiarTextoPlano(matches.map((item) => item.trim()).join(" "), ["texto"], 800);
 }
 
-function medicamentosDesdePlan(plan: string): RecetaAislada["medicamentos"] {
-  const filas: RecetaAislada["medicamentos"] = [];
-  const patron =
-    /([A-ZÁÉÍÓÚÑÜa-záéíóúñü][\wÁÉÍÓÚÑÜáéíóúñü/.-]*(?:\s+[A-ZÁÉÍÓÚÑÜa-záéíóúñü][\wÁÉÍÓÚÑÜáéíóúñü/.-]*){0,5})\s+(\d+(?:[.,]\d+)?\s*(?:mg|mcg|µg|g|ml|ui))\b(?:[^.\n]*?\b(v[ií]a\s+)?(oral|vo|ev|i\.?v\.?|i\.?m\.?|s\.?c\.?|t[oó]pica|sublingual))?(?:[^.\n]*?\b(cada\s+\d+\s*(?:horas?|hrs?|h)|c\/\s*\d+))?(?:[^.\n]*?\b(por\s+\d+\s*d[ií]as?))?/gi;
-  let match: RegExpExecArray | null = patron.exec(plan);
-  while (match) {
-    const medicamento = (match[1] ?? "").replace(/^(?:indicar|indicarle|dar|darle|tomar|recetar)\s+/i, "").trim();
-    if (medicamento) {
-      filas.push({
-        medicamento,
-        dosis: (match[2] ?? "").trim(),
-        via: (match[4] ?? "").trim(),
-        periodicidad: (match[5] ?? "").trim(),
-        instruccion: (match[6] ?? "").trim(),
-      });
-    }
-    match = patron.exec(plan);
+async function extraerPlanTerapeuticoAislado(env: Env, textoBorrador: string): Promise<string> {
+  const spec = PROMPTS_SOAP.plan;
+  const valor = await extraerCampoIndependiente(env, textoBorrador, "plan", spec.system, spec.maxLen);
+  console.log("Plan aislado:", valor || "(vacío)");
+  return valor;
+}
+
+/** Fase 2: espera el plan y, con ese texto, extrae medicamentos. No se mezcla con S/O. */
+async function extraerPlanYMedicamentosControlado(
+  env: Env,
+  textoBorrador: string
+): Promise<{ plan: string; medicamentos: RecetaAislada["medicamentos"] }> {
+  let plan = await extraerPlanTerapeuticoAislado(env, textoBorrador);
+  if (!plan) {
+    plan = planDesdeBorrador(textoBorrador);
+    console.log("Plan aislado (rescate desde borrador):", plan || "(vacío)");
   }
-  return filas;
+  const fuenteMeds = plan || textoBorrador;
+  let medicamentos = await extraerMedicamentosIndependiente(env, fuenteMeds);
+  if (!medicamentos.length) {
+    medicamentos = extraerMedicamentosDeTexto(`${plan}\n${textoBorrador}`);
+    console.log("Receta aislada medicamentos (rescate):", medicamentos.length ? medicamentos : "(vacío)");
+  }
+  return { plan, medicamentos };
 }
 
 function completarRecetaSiFalta(receta: RecetaAislada, texto: string, analisis: string, plan: string): RecetaAislada {
@@ -437,8 +447,8 @@ function completarRecetaSiFalta(receta: RecetaAislada, texto: string, analisis: 
     ].filter(Boolean);
     receta.resumen = partes.join(" ").slice(0, 800);
   }
-  if (!receta.medicamentos.length && plan) {
-    receta.medicamentos = medicamentosDesdePlan(plan);
+  if (!receta.medicamentos.length) {
+    receta.medicamentos = extraerMedicamentosDeTexto(`${plan}\n${texto}`);
   }
   return receta;
 }
@@ -453,7 +463,6 @@ export async function extraerSoapAislado(env: Env, textoBorrador: string): Promi
     "padecimiento_actual",
     "objetivo",
     "analisis",
-    "plan",
   ];
   const camposVital = Object.keys(PROMPTS_VITAL) as Array<Exclude<CampoVital, "imc">>;
 
@@ -465,7 +474,7 @@ export async function extraerSoapAislado(env: Env, textoBorrador: string): Promi
     indicaciones,
     alarmas,
     seguimiento,
-    medicamentos,
+    planYMeds,
   ] = await Promise.all([
     Promise.all(
       camposSoap.map((campo) => {
@@ -481,7 +490,7 @@ export async function extraerSoapAislado(env: Env, textoBorrador: string): Promi
     extraerRecetaIndicacionesAisladas(env, texto),
     extraerAlarmasAisladas(env, texto),
     extraerSeguimientoAislado(env, texto),
-    extraerMedicamentosIndependiente(env, texto),
+    extraerPlanYMedicamentosControlado(env, texto),
   ]);
 
   const soap: SoapAislado = {
@@ -492,6 +501,7 @@ export async function extraerSoapAislado(env: Env, textoBorrador: string): Promi
   camposSoap.forEach((campo, index) => {
     soap[campo] = valoresSoap[index] ?? "";
   });
+  soap.plan = planYMeds.plan;
   soap.subjetivo = soap.padecimiento_actual;
   camposVital.forEach((campo, index) => {
     soap.signos_vitales[campo] = valoresVital[index] ?? "";
@@ -502,7 +512,7 @@ export async function extraerSoapAislado(env: Env, textoBorrador: string): Promi
       titulo,
       resumen,
       indicaciones,
-      medicamentos,
+      medicamentos: planYMeds.medicamentos,
       alarmas,
       seguimiento,
     },

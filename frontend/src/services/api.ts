@@ -546,8 +546,8 @@ class ApiService {
           resumen: recetaTexto('resumen'),
           indicaciones: recetaTexto('indicaciones'),
           medicamentos,
-          alarmas: recetaTexto('alarmas'),
-          seguimiento: recetaTexto('seguimiento'),
+          alarmas: recetaTexto('alarmas') || (typeof json.alarmas === 'string' ? json.alarmas.trim() : ''),
+          seguimiento: recetaTexto('seguimiento') || (typeof json.seguimiento === 'string' ? json.seguimiento.trim() : ''),
         },
       };
       console.log('SOAP aislado recibido:', soap);

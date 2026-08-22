@@ -245,6 +245,8 @@ consultaRoutes.post("/motivo-aislado", async (c) => {
       {
         motivo: soap.motivo_consulta,
         ...soap,
+        alarmas: soap.receta.alarmas,
+        seguimiento: soap.receta.seguimiento,
       },
       200
     );

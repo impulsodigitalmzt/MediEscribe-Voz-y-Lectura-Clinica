@@ -372,8 +372,8 @@ export default function ConsultaWorkspace() {
     aplicarTexto('receta_titulo', 'titulo', 'Receta título aislado');
     aplicarTexto('receta_resumen', 'resumen', 'Receta resumen aislado');
     aplicarTexto('receta_indicaciones', 'indicaciones', 'Receta indicaciones aislado');
-    aplicarTexto('receta_alarmas', 'alarmas', 'Receta alarmas aislado');
-    aplicarTexto('receta_seguimiento', 'seguimiento', 'Receta seguimiento aislado');
+    aplicarTexto('receta_alarmas', 'alarmas', 'Alarmas aisladas');
+    aplicarTexto('receta_seguimiento', 'seguimiento', 'Seguimiento aislado');
     const meds = Array.isArray(recetaIn.medicamentos)
       ? recetaIn.medicamentos.filter((row) => row.medicamento?.trim())
       : [];

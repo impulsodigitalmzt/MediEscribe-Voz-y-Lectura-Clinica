@@ -430,7 +430,7 @@ export async function crearPaciente(sql: Sql, input: PacienteAlta, medicoId?: st
       ${domicilio},
       ${curp},
       ${ocupacion},
-      ${sql.json(antecedentes)},
+      ${sql.json(antecedentes)}::jsonb,
       true,
       NOW(),
       ${medicoId ?? null}

@@ -19,7 +19,7 @@ export default function VoiceDictationPanel({
   const dictadoRef = useRef(dictado);
   dictadoRef.current = dictado;
   const [showWaves, setShowWaves] = useState(false);
-  const { listening, interim, supported, start, stop } = useSpeechDictation((chunk) => {
+  const { listening, interim, micLive, supported, start, stop } = useSpeechDictation((chunk) => {
     const current = dictadoRef.current;
     onDictado(current ? `${current.trim()} ${chunk}` : chunk);
   });
@@ -29,6 +29,7 @@ export default function VoiceDictationPanel({
   }, [listening]);
 
   const capturing = showWaves || listening;
+  const hablando = capturing && (micLive || Boolean(interim.trim()));
   const textoCaja = capturing && interim ? `${dictado}${dictado ? ' ' : ''}${interim}` : dictado;
 
   const handleStart = async () => {
@@ -115,22 +116,23 @@ export default function VoiceDictationPanel({
             type="button"
             className={
               capturing
-                ? 'btn-secondary py-3.5 px-6 text-base font-medium min-h-[52px] voice-record-btn is-listening'
+                ? 'inline-flex items-center justify-center gap-2 py-3.5 px-6 text-base font-medium min-h-[52px] rounded-xl text-white bg-red-600 hover:bg-red-700 active:bg-red-800 focus:outline-none focus:ring-2 focus:ring-red-400 focus:ring-offset-2 voice-record-btn is-listening'
                 : 'btn-primary py-3.5 px-6 text-base font-semibold shadow-lg shadow-teal-600/30 min-h-[52px] voice-record-btn'
             }
             onClick={handleMicClick}
             aria-pressed={capturing}
+            aria-label={capturing ? 'Detener grabación' : 'Dictar por voz'}
           >
             {capturing ? <Square className="w-4 h-4" /> : <Mic className="w-5 h-5" />}
-            {capturing ? 'Detener y redactar SOAP' : 'Dictar por voz'}
+            {capturing ? 'Grabando…' : 'Dictar por voz'}
           </button>
           {capturing ? (
             <span
-              className="voice-listen-dot"
+              className={hablando ? 'voice-vu-led is-on' : 'voice-vu-led'}
               role="status"
               aria-live="polite"
-              aria-label="Escucha activa"
-              title="Escucha activa"
+              aria-label={hablando ? 'Voz detectada' : 'Grabación en silencio'}
+              title={hablando ? 'Voz detectada' : 'Micrófono activo'}
             />
           ) : null}
         </div>

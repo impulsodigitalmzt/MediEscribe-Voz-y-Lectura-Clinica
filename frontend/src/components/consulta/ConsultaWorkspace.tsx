@@ -11,6 +11,7 @@ import PhysicianIdentityBar from './PhysicianIdentityBar';
 import VoiceDictationPanel from './VoiceDictationPanel';
 import NoteEditor from './NoteEditor';
 import ConsentimientoInformado from './ConsentimientoInformado';
+import AvisoConformidadLegal from './AvisoConformidadLegal';
 import { stampMexicoNow } from '../../utils';
 import { asegurarNotaStrings, extraerSoapDesdeRespuesta, mapearNotaDesdeIA, notaClinicaVacia, transcripcionPlana } from '../../lib/mapearNotaClinica';
 import { validarNotaNom004, fusionarIdentidadPaciente } from '../../lib/validarNom004';
@@ -382,8 +383,9 @@ export default function ConsultaWorkspace() {
         medicamentos: meds.length ? meds : prev.medicamentos,
       }));
     });
-    setGuardia(validarNotaNom004(notaAplicada, consulta?.paciente, consulta?.paciente_nombre));
-    return cuantos;
+    const dictamen = validarNotaNom004(notaAplicada, consulta?.paciente, consulta?.paciente_nombre);
+    setGuardia(dictamen);
+    return { cuantos, cumple: dictamen.cumple };
   };
 
   const handleGenerarDesdeTexto = async (textoCaja?: string) => {
@@ -416,9 +418,13 @@ export default function ConsultaWorkspace() {
     setSavedMsg('');
     try {
       const soap = await api.extraerSoapAislado(texto);
-      const cuantos = aplicarSoapJson(soap);
+      const { cuantos, cumple } = aplicarSoapJson(soap);
       if (cuantos > 0) {
-        setSavedMsg('Nota SOAP sintetizada. Revise S-O-A-P; los campos sin dato clínico quedaron vacíos.');
+        setSavedMsg(
+          cumple
+            ? 'Nota SOAP sintetizada. El documento cumple la NOM-004-SSA3-2012 y la normativa vigente de esta consulta (LFPDPPP).'
+            : 'Nota SOAP sintetizada. Revise S-O-A-P; los campos sin dato clínico quedaron vacíos.',
+        );
       } else {
         setError('Groq no devolvió contenido clínico para pintar.');
       }
@@ -682,6 +688,7 @@ export default function ConsultaWorkspace() {
               <ul className="list-disc pl-5 space-y-0.5">{guardia.guia.map((item) => <li key={item}>{item}</li>)}</ul>
             </div>
           )}
+          <AvisoConformidadLegal cumple={Boolean(guardia?.cumple)} consentimientoListo={consentimientoListo} />
 
           <PhysicianIdentityBar user={user} fecha={nota.fecha} hora={nota.hora} />
 

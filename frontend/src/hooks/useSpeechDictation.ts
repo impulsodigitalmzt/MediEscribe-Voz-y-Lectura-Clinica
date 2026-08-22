@@ -148,9 +148,9 @@ export function useSpeechDictation(onFinal: (transcript: string) => void) {
         const wave = Math.abs((sample - 128) / 128);
         return Math.max(0.08, Math.min(1, freqLevel * 0.85 + wave * 0.45 + rms * 0.9));
       });
-      if (now - lastLive > 180) {
+      if (now - lastLive > 80) {
         lastLive = now;
-        const speaking = rms > 0.028;
+        const speaking = rms > 0.022;
         setMicLive((prev) => (prev === speaking ? prev : speaking));
       }
       raf = requestAnimationFrame(tick);

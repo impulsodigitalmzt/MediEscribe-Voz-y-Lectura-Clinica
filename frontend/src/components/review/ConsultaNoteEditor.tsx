@@ -4,6 +4,7 @@ import { useAuth } from '../../hooks/useAuth';
 import api, { ConsultaValidacionError } from '../../services/api';
 import type { ConsultaHistorialItem, ConsultaMedica, DictamenNom004, NotaAclaracion, NotaClinica, RecetaPaciente } from '../../types';
 import { validarNotaNom004, fusionarIdentidadPaciente } from '../../lib/validarNom004';
+import AvisoConformidadLegal from '../consulta/AvisoConformidadLegal';
 import {
   AlertCircle, AlertTriangle, ArrowLeft, CheckCircle2, Copy, Download, FileText, Loader2, Mic, Plus, Printer, Save, Trash2, Upload,
 } from 'lucide-react';
@@ -374,6 +375,10 @@ export default function ConsultaNoteEditor() {
               <ul className="list-disc pl-5 space-y-0.5">{guardia.guia.map((item) => <li key={item}>{item}</li>)}</ul>
             </div>
           )}
+          <AvisoConformidadLegal
+            cumple={Boolean(guardia?.cumple)}
+            consentimientoListo={Boolean(consulta?.consentimiento_informado_aceptado && consulta?.consentimiento_ia_aceptado)}
+          />
 
           {consulta?.paciente && (
             <div className="no-print card p-4">

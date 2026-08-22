@@ -542,12 +542,12 @@ class ApiService {
           glucosa: signo('glucosa'),
         },
         receta: {
-          titulo: recetaTexto('titulo'),
-          resumen: recetaTexto('resumen'),
-          indicaciones: recetaTexto('indicaciones'),
+          titulo: recetaTexto('titulo') || textoDe('receta_titulo'),
+          resumen: recetaTexto('resumen') || textoDe('receta_resumen'),
+          indicaciones: recetaTexto('indicaciones') || textoDe('receta_indicaciones'),
           medicamentos,
-          alarmas: recetaTexto('alarmas') || (typeof json.alarmas === 'string' ? json.alarmas.trim() : ''),
-          seguimiento: recetaTexto('seguimiento') || (typeof json.seguimiento === 'string' ? json.seguimiento.trim() : ''),
+          alarmas: recetaTexto('alarmas') || textoDe('alarmas', 'receta_alarmas'),
+          seguimiento: recetaTexto('seguimiento') || textoDe('seguimiento', 'receta_seguimiento'),
         },
       };
       console.log('SOAP aislado recibido:', soap);

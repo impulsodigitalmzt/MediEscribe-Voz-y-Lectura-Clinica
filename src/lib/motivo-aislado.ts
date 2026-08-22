@@ -94,21 +94,6 @@ function calcImc(peso: string, talla: string): string {
   return (kg / (metros * metros)).toFixed(2);
 }
 
-const CONCURRENCIA_GROQ = 4;
-
-async function ejecutarEnLotes<T>(tareas: Array<() => Promise<T>>, tamano = CONCURRENCIA_GROQ): Promise<T[]> {
-  const resultados: T[] = [];
-  for (let i = 0; i < tareas.length; i += tamano) {
-    if (i > 0) {
-      await new Promise((resolve) => setTimeout(resolve, 180));
-    }
-    const lote = tareas.slice(i, i + tamano);
-    const parte = await Promise.all(lote.map((tarea) => tarea()));
-    resultados.push(...parte);
-  }
-  return resultados;
-}
-
 async function extraerCampoIndependiente(
   env: Env,
   textoBorrador: string,
@@ -218,8 +203,8 @@ function parseMedicamentos(raw: string): RecetaAislada["medicamentos"] {
 }
 
 async function extraerMedicamentosIndependiente(env: Env, textoBorrador: string): Promise<RecetaAislada["medicamentos"]> {
-  try {
-    const crudo = await groqChatPlainText(
+  const pedir = () =>
+    groqChatPlainText(
       env,
       [
         {
@@ -231,6 +216,18 @@ async function extraerMedicamentosIndependiente(env: Env, textoBorrador: string)
       ],
       { temperature: 0.2, maxTokens: 1024, timeoutMs: 16_000 }
     );
+  try {
+    let crudo = "";
+    try {
+      crudo = await pedir();
+    } catch (error) {
+      console.error(
+        "Receta aislada medicamentos reintento:",
+        error instanceof Error ? error.message : "error"
+      );
+      await new Promise((resolve) => setTimeout(resolve, 700));
+      crudo = await pedir();
+    }
     const meds = parseMedicamentos(crudo);
     console.log("Receta aislada medicamentos:", meds.length ? meds : "(vacío)");
     return meds;
@@ -297,7 +294,7 @@ const PROMPTS_VITAL: Record<Exclude<CampoVital, "imc">, string> = {
   ta_diastolica:
     `${TONO_SOAP} Extrae SOLO la tensión arterial diastólica medida o dictada. Responde únicamente el número. Si dice 120/80 responde 80. Si dice 12/8 responde 80.`,
   temperatura:
-    `${TONO_SOAP} Extrae SOLO la temperatura en °C si el texto la menciona (fiebre, calentura o temp). Responde únicamente el número, p. ej. 38.5 o 37.8.`,
+    `${TONO_SOAP} Extrae SOLO la temperatura en °C. Si hay fiebre referida (p. ej. 38.5) y una temperatura medida ahora en consulta, usa la medida ahora (p. ej. 37.8). Responde únicamente el número.`,
   fc: `${TONO_SOAP} Extrae SOLO la frecuencia cardíaca en lpm. Responde únicamente el número.`,
   fr: `${TONO_SOAP} Extrae SOLO la frecuencia respiratoria en rpm. Responde únicamente el número.`,
   spo2: `${TONO_SOAP} Extrae SOLO la saturación de oxígeno (SpO2) en %. Responde únicamente el número.`,
@@ -306,65 +303,147 @@ const PROMPTS_VITAL: Record<Exclude<CampoVital, "imc">, string> = {
   glucosa: `${TONO_SOAP} Extrae SOLO la glucosa. Responde únicamente el número.`,
 };
 
-const PROMPTS_RECETA: Record<"titulo" | "resumen" | "indicaciones", { system: string; maxLen: number }> = {
+const TONO_RECETA =
+  "Redacta la receta para el paciente en español claro. Sin JSON, sin saludos, sin comillas envolventes. El borrador es un dictado conversacional: extrae y reformula el contenido clínico aunque no use las palabras título, resumen, indicaciones, alarmas o seguimiento. No dejes el campo vacío si el borrador ya menciona ese contenido. No inventes fármacos, dosis ni plazos que no estén.";
+
+const PROMPTS_RECETA: Record<CampoRecetaTexto, { system: string; maxLen: number }> = {
   titulo: {
     maxLen: 180,
-    system: `${TONO_SOAP}
-Campo: Título de receta.
-Una frase formal breve si hay tratamiento o receta. Ejemplo: Tratamiento para bronquitis aguda.`,
+    system: `${TONO_RECETA}
+Campo: Título.
+Una frase breve si hay diagnóstico o tratamiento. Ejemplo: Tratamiento para bronquitis aguda.`,
   },
   resumen: {
     maxLen: 800,
-    system: `${TONO_SOAP}
+    system: `${TONO_RECETA}
 Campo: Resumen para el paciente.
-Párrafo corto (2 a 4 frases) en lenguaje claro, pero con rigor clínico: qué tiene y qué debe hacer, según el texto. Si no hay un resumen dictado, sintetiza uno breve a partir de síntomas e indicaciones. Vacío solo si no hay clínica.`,
+Escribe 2 a 4 frases: qué tiene y qué debe hacer, según el borrador. Si no hay un resumen dictado, sintetízalo con el diagnóstico y las indicaciones que sí consten.`,
   },
   indicaciones: {
     maxLen: 1200,
-    system: `${TONO_SOAP}
+    system: `${TONO_RECETA}
 Campo: Indicaciones.
-Desglosa de forma formal SOLO lo dictado: medidas generales (reposo, hidratación), cómo tomar el tratamiento y estudios de gabinete (p. ej. radiografía de tórax) si se solicitaron.
-No inventes reposo ni estudios. Si no hay indicaciones, cadena vacía.`,
+Desglosa reposo, hidratación, cómo tomar el tratamiento y estudios de gabinete si el médico los indicó (p. ej. radiografía de tórax).`,
+  },
+  alarmas: {
+    maxLen: 800,
+    system: `${TONO_RECETA}
+Campo: Alarmas / cuándo acudir.
+Extrae cuándo regresar o ir a urgencias (empeorar, más disnea, falta de aire). Ejemplo: Acudir de inmediato a urgencias si aumenta la disnea o empeoran los síntomas.`,
+  },
+  seguimiento: {
+    maxLen: 400,
+    system: `${TONO_RECETA}
+Campo: Seguimiento.
+Extrae la cita o plazo de revisión (p. ej. en 5 días). Ejemplo: Cita de revisión médica en 5 días.`,
   },
 };
 
-const PROMPT_ALARMAS = `${TONO_SOAP}
-Campo: Alarmas / cuándo acudir.
-Extrae SOLO datos de alarma o emergencias mencionados. Estilo: Acudir de inmediato a urgencias en caso de incremento de la disnea o empeoramiento general.
-No inventes alarmas genéricas. Si no hay alertas en el texto, cadena vacía.`;
+async function extraerRecetaTituloAislado(env: Env, textoBorrador: string): Promise<string> {
+  const spec = PROMPTS_RECETA.titulo;
+  const valor = await extraerCampoIndependiente(env, textoBorrador, "receta_titulo", spec.system, spec.maxLen);
+  console.log("Receta título aislado:", valor || "(vacío)");
+  return valor;
+}
 
-const PROMPT_SEGUIMIENTO = `${TONO_SOAP}
-Campo: Seguimiento.
-Extrae SOLO la cita o plazo de revisión dictado. Estilo: Cita de revisión médica en 5 días.
-No inventes la fecha ni el intervalo. Si no hay seguimiento en el texto, cadena vacía.`;
+async function extraerRecetaResumenAislado(env: Env, textoBorrador: string): Promise<string> {
+  const spec = PROMPTS_RECETA.resumen;
+  const valor = await extraerCampoIndependiente(env, textoBorrador, "receta_resumen", spec.system, spec.maxLen);
+  console.log("Receta resumen aislado:", valor || "(vacío)");
+  return valor;
+}
+
+async function extraerRecetaIndicacionesAisladas(env: Env, textoBorrador: string): Promise<string> {
+  const spec = PROMPTS_RECETA.indicaciones;
+  const valor = await extraerCampoIndependiente(env, textoBorrador, "receta_indicaciones", spec.system, spec.maxLen);
+  console.log("Receta indicaciones aisladas:", valor || "(vacío)");
+  return valor;
+}
 
 async function extraerAlarmasAisladas(env: Env, textoBorrador: string): Promise<string> {
-  const valor = await extraerCampoIndependiente(
-    env,
-    textoBorrador,
-    "alarmas",
-    PROMPT_ALARMAS,
-    800
-  );
-  const limpio = limpiarTextoPlano(valor, ["alarmas", "alarma", "receta_alarmas"], 800);
-  console.log("Alarmas aisladas:", limpio || "(vacío)");
-  return limpio;
+  const spec = PROMPTS_RECETA.alarmas;
+  const valor = await extraerCampoIndependiente(env, textoBorrador, "receta_alarmas", spec.system, spec.maxLen);
+  console.log("Alarmas aisladas:", valor || "(vacío)");
+  return valor;
 }
 
 async function extraerSeguimientoAislado(env: Env, textoBorrador: string): Promise<string> {
-  const valor = await extraerCampoIndependiente(
-    env,
-    textoBorrador,
-    "seguimiento",
-    PROMPT_SEGUIMIENTO,
-    400
-  );
-  const limpio = limpiarTextoPlano(valor, ["seguimiento", "follow_up", "receta_seguimiento", "control", "cita"], 400);
-  console.log("Seguimiento aislado:", limpio || "(vacío)");
-  return limpio;
+  const spec = PROMPTS_RECETA.seguimiento;
+  const valor = await extraerCampoIndependiente(env, textoBorrador, "receta_seguimiento", spec.system, spec.maxLen);
+  console.log("Seguimiento aislado:", valor || "(vacío)");
+  return valor;
 }
 
-/** Cada campo se pide a Groq por separado. Un fallo no rompe los demás. */
+function primeraFrase(texto: string): string {
+  return texto.split(/[.\n]/).map((parte) => parte.trim()).find(Boolean) ?? "";
+}
+
+function frasesPorPatron(texto: string, patron: RegExp): string {
+  const matches = texto.match(patron);
+  if (!matches?.length) return "";
+  return limpiarTextoPlano(matches.map((item) => item.trim()).join(" "), ["texto"], 800);
+}
+
+function medicamentosDesdePlan(plan: string): RecetaAislada["medicamentos"] {
+  const filas: RecetaAislada["medicamentos"] = [];
+  const patron =
+    /([A-ZÁÉÍÓÚÑÜa-záéíóúñü][\wÁÉÍÓÚÑÜáéíóúñü/.-]*(?:\s+[A-ZÁÉÍÓÚÑÜa-záéíóúñü][\wÁÉÍÓÚÑÜáéíóúñü/.-]*){0,5})\s+(\d+(?:[.,]\d+)?\s*(?:mg|mcg|µg|g|ml|ui))\b(?:[^.\n]*?\b(v[ií]a\s+)?(oral|vo|ev|i\.?v\.?|i\.?m\.?|s\.?c\.?|t[oó]pica|sublingual))?(?:[^.\n]*?\b(cada\s+\d+\s*(?:horas?|hrs?|h)|c\/\s*\d+))?(?:[^.\n]*?\b(por\s+\d+\s*d[ií]as?))?/gi;
+  let match: RegExpExecArray | null = patron.exec(plan);
+  while (match) {
+    const medicamento = (match[1] ?? "").replace(/^(?:indicar|indicarle|dar|darle|tomar|recetar)\s+/i, "").trim();
+    if (medicamento) {
+      filas.push({
+        medicamento,
+        dosis: (match[2] ?? "").trim(),
+        via: (match[4] ?? "").trim(),
+        periodicidad: (match[5] ?? "").trim(),
+        instruccion: (match[6] ?? "").trim(),
+      });
+    }
+    match = patron.exec(plan);
+  }
+  return filas;
+}
+
+function completarRecetaSiFalta(receta: RecetaAislada, texto: string, analisis: string, plan: string): RecetaAislada {
+  const fuente = `${texto}\n${plan}`;
+  if (!receta.titulo.trim()) {
+    const dx = primeraFrase(analisis).replace(/\s*\(.*$/, "").slice(0, 80);
+    receta.titulo = dx ? `Tratamiento para ${dx}` : plan ? "Tratamiento indicado" : "";
+  }
+  if (!receta.indicaciones.trim()) {
+    receta.indicaciones = plan || frasesPorPatron(
+      fuente,
+      /[^.?!]*(?:reposo|hidrataci[oó]n|radiograf[ií]a|tomar|v[ií]a oral|cada\s+\d+)[^.?!]*[.?!]?/gi
+    );
+  }
+  if (!receta.alarmas.trim()) {
+    receta.alarmas = frasesPorPatron(
+      fuente,
+      /[^.?!]*(?:urgenc|empeor|falta(?:r)?(?:le)?(?:\s+m[aá]s)?\s+el aire|disnea|si (?:aumenta|empeora|se pone peor)|alarma)[^.?!]*[.?!]?/gi
+    );
+  }
+  if (!receta.seguimiento.trim()) {
+    receta.seguimiento = frasesPorPatron(
+      fuente,
+      /[^.?!]*(?:en\s+\d+\s*d[ií]as|control(?:\s+ambulatorio)?|cita de revisi[oó]n|seguimiento|revisi[oó]n m[eé]dica)[^.?!]*[.?!]?/gi
+    );
+  }
+  if (!receta.resumen.trim()) {
+    const dx = primeraFrase(analisis);
+    const partes = [
+      dx ? `Le diagnosticaron ${dx}.` : "",
+      receta.indicaciones || plan,
+    ].filter(Boolean);
+    receta.resumen = partes.join(" ").slice(0, 800);
+  }
+  if (!receta.medicamentos.length && plan) {
+    receta.medicamentos = medicamentosDesdePlan(plan);
+  }
+  return receta;
+}
+
+/** Cada campo se pide a Groq por separado. SOAP, signos y receta arrancan juntos. */
 export async function extraerSoapAislado(env: Env, textoBorrador: string): Promise<SoapAislado> {
   const texto = textoBorrador.trim();
   if (!texto) return { ...SOAP_VACIO, signos_vitales: vacioSignosVitales(), receta: { ...RECETA_VACIA, medicamentos: [] } };
@@ -377,28 +456,33 @@ export async function extraerSoapAislado(env: Env, textoBorrador: string): Promi
     "plan",
   ];
   const camposVital = Object.keys(PROMPTS_VITAL) as Array<Exclude<CampoVital, "imc">>;
-  const camposReceta = Object.keys(PROMPTS_RECETA) as Array<"titulo" | "resumen" | "indicaciones">;
 
-  const valoresSoap = await ejecutarEnLotes(
-    camposSoap.map((campo) => {
-      const spec = PROMPTS_SOAP[campo];
-      return () => extraerCampoIndependiente(env, texto, campo, spec.system, spec.maxLen);
-    })
-  );
-  const valoresReceta = await ejecutarEnLotes(
-    camposReceta.map((campo) => {
-      const spec = PROMPTS_RECETA[campo];
-      return () => extraerCampoIndependiente(env, texto, `receta_${campo}`, spec.system, spec.maxLen);
-    })
-  );
-  const [medicamentos, alarmas, seguimiento] = await Promise.all([
-    extraerMedicamentosIndependiente(env, texto),
+  const [
+    valoresSoap,
+    valoresVital,
+    titulo,
+    resumen,
+    indicaciones,
+    alarmas,
+    seguimiento,
+    medicamentos,
+  ] = await Promise.all([
+    Promise.all(
+      camposSoap.map((campo) => {
+        const spec = PROMPTS_SOAP[campo];
+        return extraerCampoIndependiente(env, texto, campo, spec.system, spec.maxLen);
+      })
+    ),
+    Promise.all(
+      camposVital.map((campo) => extraerVitalIndependiente(env, texto, campo, PROMPTS_VITAL[campo]))
+    ),
+    extraerRecetaTituloAislado(env, texto),
+    extraerRecetaResumenAislado(env, texto),
+    extraerRecetaIndicacionesAisladas(env, texto),
     extraerAlarmasAisladas(env, texto),
     extraerSeguimientoAislado(env, texto),
+    extraerMedicamentosIndependiente(env, texto),
   ]);
-  const valoresVital = await ejecutarEnLotes(
-    camposVital.map((campo) => () => extraerVitalIndependiente(env, texto, campo, PROMPTS_VITAL[campo]))
-  );
 
   const soap: SoapAislado = {
     ...SOAP_VACIO,
@@ -413,36 +497,28 @@ export async function extraerSoapAislado(env: Env, textoBorrador: string): Promi
     soap.signos_vitales[campo] = valoresVital[index] ?? "";
   });
   soap.signos_vitales.imc = calcImc(soap.signos_vitales.peso, soap.signos_vitales.talla);
-  camposReceta.forEach((campo, index) => {
-    soap.receta[campo] = valoresReceta[index] ?? "";
+  soap.receta = completarRecetaSiFalta(
+    {
+      titulo,
+      resumen,
+      indicaciones,
+      medicamentos,
+      alarmas,
+      seguimiento,
+    },
+    texto,
+    soap.analisis,
+    soap.plan
+  );
+
+  console.log("Receta aislada lista:", {
+    titulo: soap.receta.titulo || "(vacío)",
+    resumen: soap.receta.resumen || "(vacío)",
+    indicaciones: soap.receta.indicaciones || "(vacío)",
+    medicamentos: soap.receta.medicamentos.length,
+    alarmas: soap.receta.alarmas || "(vacío)",
+    seguimiento: soap.receta.seguimiento || "(vacío)",
   });
-  soap.receta.medicamentos = medicamentos;
-  soap.receta.alarmas = alarmas;
-  soap.receta.seguimiento = seguimiento;
-
-  if (!soap.receta.resumen.trim()) {
-    const contexto = [
-      soap.analisis && `Diagnóstico: ${soap.analisis}`,
-      soap.plan && `Plan: ${soap.plan}`,
-      soap.receta.titulo && `Título: ${soap.receta.titulo}`,
-      soap.receta.indicaciones && `Indicaciones: ${soap.receta.indicaciones}`,
-      soap.receta.medicamentos.length
-        ? `Medicamentos: ${soap.receta.medicamentos.map((m) => [m.medicamento, m.dosis, m.periodicidad].filter(Boolean).join(" ")).join("; ")}`
-        : "",
-    ]
-      .filter(Boolean)
-      .join("\n");
-    const sintetizado = await extraerCampoIndependiente(
-      env,
-      `${texto}\n\n${contexto}`,
-      "resumen",
-      "Eres un médico que explica al paciente. Escribe ÚNICAMENTE un párrafo corto (2 a 4 frases) en español sencillo. Resume el diagnóstico de forma simple y las indicaciones principales (qué debe hacer). Sin JSON, sin saludos. Si solo hay indicaciones, conviértelas en un resumen breve. No lo dejes vacío si hay clínica o indicaciones.",
-      800
-    );
-    soap.receta.resumen = sintetizado || soap.receta.indicaciones.slice(0, 400);
-    console.log("Receta resumen aislado (síntesis):", soap.receta.resumen || "(vacío)");
-  }
-
   console.log("SOAP aislado (worker):", JSON.stringify(soap));
   return soap;
 }

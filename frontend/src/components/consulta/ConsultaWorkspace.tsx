@@ -14,6 +14,7 @@ import ConsentimientoInformado from './ConsentimientoInformado';
 import { stampMexicoNow } from '../../utils';
 import { asegurarNotaStrings, extraerSoapDesdeRespuesta, mapearNotaDesdeIA, notaClinicaVacia, transcripcionPlana } from '../../lib/mapearNotaClinica';
 import { validarNotaNom004 } from '../../lib/validarNom004';
+import { completarRecetaDesdeSoap } from '../../lib/completarReceta';
 
 const EMPTY_NOTA: NotaClinica = notaClinicaVacia();
 
@@ -289,24 +290,24 @@ export default function ConsultaWorkspace() {
       const valor = texto(soap.signos_vitales?.[key]);
       if (valor && valor !== '0') signosPatch[key] = valor;
     }
-    const recetaIn = soap.receta;
+    const recetaCompleta = completarRecetaDesdeSoap({
+      receta: soap.receta,
+      analisis,
+      plan,
+      borrador: dictado,
+    });
+    console.log('Receta título aislado:', recetaCompleta.titulo || '(vacío)');
+    console.log('Receta resumen aislado:', recetaCompleta.resumen || '(vacío)');
+    console.log('Receta indicaciones aisladas:', recetaCompleta.indicaciones || '(vacío)');
+    console.log('Alarmas aisladas:', recetaCompleta.alarmas || '(vacío)');
+    console.log('Seguimiento aislado:', recetaCompleta.seguimiento || '(vacío)');
     const recetaPatch: Partial<RecetaPaciente> = {};
-    if (recetaIn) {
-      const titulo = texto(recetaIn.titulo);
-      const resumen = texto(recetaIn.resumen);
-      const indicaciones = texto(recetaIn.indicaciones);
-      const alarmas = texto(recetaIn.alarmas);
-      const seguimiento = texto(recetaIn.seguimiento);
-      if (titulo) recetaPatch.titulo = titulo;
-      if (resumen) recetaPatch.resumen = resumen;
-      if (indicaciones) recetaPatch.indicaciones = indicaciones;
-      if (alarmas) recetaPatch.alarmas = alarmas;
-      if (seguimiento) recetaPatch.seguimiento = seguimiento;
-      const meds = Array.isArray(recetaIn.medicamentos)
-        ? recetaIn.medicamentos.filter((row) => row.medicamento?.trim())
-        : [];
-      if (meds.length) recetaPatch.medicamentos = meds;
-    }
+    if (recetaCompleta.titulo) recetaPatch.titulo = recetaCompleta.titulo;
+    if (recetaCompleta.resumen) recetaPatch.resumen = recetaCompleta.resumen;
+    if (recetaCompleta.indicaciones) recetaPatch.indicaciones = recetaCompleta.indicaciones;
+    if (recetaCompleta.alarmas) recetaPatch.alarmas = recetaCompleta.alarmas;
+    if (recetaCompleta.seguimiento) recetaPatch.seguimiento = recetaCompleta.seguimiento;
+    if (recetaCompleta.medicamentos.length) recetaPatch.medicamentos = recetaCompleta.medicamentos;
 
     let notaAplicada = nota;
     let cuantos = 0;
@@ -337,6 +338,7 @@ export default function ConsultaWorkspace() {
           analisis: analisis || prev.analisis,
           diagnostico: analisis || prev.diagnostico,
           plan: plan || prev.plan,
+          seguimiento: recetaPatch.seguimiento || prev.seguimiento,
           signos_vitales: nextSignos as SignosVitales,
           tratamiento,
         });

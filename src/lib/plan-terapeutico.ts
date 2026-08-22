@@ -37,6 +37,54 @@ function capitalizarNombre(nombre: string): string {
     .join(" ");
 }
 
+const VIA_ORAL =
+  /\b(?:tomar|t[oó]mese|t[oó]mela|se va a tomar|va a tomar|v[ií]a\s+oral|\bvo\b|tabletas?|c[aá]psulas?|comprimidos?|jarabe)\b/i;
+const VIA_IV = /\b(?:intravenos|endovenos|\bi\.?v\.?\b|\bev\b)\b/i;
+const VIA_IM = /\b(?:intramuscular|\bi\.?m\.?\b)\b/i;
+
+export function inferirViaAdministracion(viaActual: string, contexto: string): string {
+  const actual = (viaActual ?? "").trim();
+  if (actual) {
+    if (/^(vo|v[ií]a\s+oral)$/i.test(actual)) return "oral";
+    return actual;
+  }
+  const c = contexto ?? "";
+  if (VIA_IV.test(c)) return "IV";
+  if (VIA_IM.test(c)) return "IM";
+  if (/\b(?:subcut[aá]nea|\bs\.?c\.?\b)/i.test(c)) return "subcutánea";
+  if (/\binhal/i.test(c)) return "inhalada";
+  if (/\bsublingual/i.test(c)) return "sublingual";
+  if (/\bt[oó]pic/i.test(c)) return "tópica";
+  if (VIA_ORAL.test(c)) return "oral";
+  return "";
+}
+
+function ventanaMedicamento(nombre: string, texto: string): string {
+  const fuente = (texto ?? "").replace(/\s+/g, " ");
+  const clave = nombre.split(/[/,]/)[0].trim().slice(0, 10).toLowerCase();
+  if (!clave) return fuente;
+  const idx = fuente.toLowerCase().indexOf(clave);
+  if (idx < 0) return fuente;
+  return fuente.slice(Math.max(0, idx - 40), Math.min(fuente.length, idx + 220));
+}
+
+export function completarViasMedicamentos<
+  T extends { medicamento: string; via: string; dosis?: string; periodicidad?: string },
+>(meds: T[], texto: string): T[] {
+  const hayTomarGlobal = VIA_ORAL.test(texto);
+  return meds.map((row) => {
+    const ventana = ventanaMedicamento(row.medicamento, texto);
+    let via = inferirViaAdministracion(row.via, `${ventana} ${row.via}`);
+    if (!via && hayTomarGlobal && !VIA_IV.test(ventana) && !VIA_IM.test(ventana)) {
+      via = "oral";
+    }
+    if (!via && /\bmg\b/i.test(row.dosis ?? "") && (row.periodicidad ?? "").trim() && !VIA_IV.test(ventana) && !VIA_IM.test(ventana)) {
+      via = "oral";
+    }
+    return { ...row, via };
+  });
+}
+
 export function extraerMedicamentosDeTexto(texto: string): MedicamentoAislado[] {
   const fuente = normalizarTextoTratamiento(texto);
   const filas: MedicamentoAislado[] = [];
@@ -59,7 +107,7 @@ export function extraerMedicamentosDeTexto(texto: string): MedicamentoAislado[] 
     if (!vistos.has(clave)) {
       vistos.add(clave);
       const periodicidad = (match[5] ?? "").trim();
-      const via = (match[4] ?? "").trim() || (/oral|tomar/i.test(match[0]) || periodicidad ? "oral" : "");
+      const via = inferirViaAdministracion(match[4] ?? "", `${match[0]} ${fuente}`);
       filas.push({
         medicamento: capitalizarNombre(nombre),
         dosis,
@@ -70,7 +118,7 @@ export function extraerMedicamentosDeTexto(texto: string): MedicamentoAislado[] 
     }
     match = patron.exec(fuente);
   }
-  return filas;
+  return completarViasMedicamentos(filas, fuente);
 }
 
 function frasesPorPatron(texto: string, patron: RegExp): string {

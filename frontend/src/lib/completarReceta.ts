@@ -1,5 +1,5 @@
 import type { RecetaPaciente } from '../types';
-import { extraerMedicamentosDeTexto } from './completarPlan';
+import { extraerMedicamentosDeTexto, completarViasMedicamentos } from './completarPlan';
 
 function texto(value?: string): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -70,5 +70,6 @@ export function completarRecetaDesdeSoap(input: {
   if (!receta.medicamentos.length) {
     receta.medicamentos = extraerMedicamentosDeTexto(`${plan}\n${fuente}`);
   }
+  receta.medicamentos = completarViasMedicamentos(receta.medicamentos, fuente);
   return receta;
 }

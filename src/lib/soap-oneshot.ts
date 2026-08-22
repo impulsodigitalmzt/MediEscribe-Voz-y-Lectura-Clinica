@@ -1,5 +1,5 @@
 import { groqChatJson } from "./groq";
-import { extraerMedicamentosDeTexto, planDesdeBorrador } from "./plan-terapeutico";
+import { extraerMedicamentosDeTexto, planDesdeBorrador, completarViasMedicamentos } from "./plan-terapeutico";
 import { vacioSignosVitales, type RecetaPaciente, type SignosVitales } from "./nota-types";
 
 export type MedicamentoOneshot = {
@@ -68,7 +68,7 @@ REGLAS:
 5. Signos vitales: solo números (sin unidades). TA 120/80 → ta_sistolica "120" y ta_diastolica "80". Notación 12/8 → 120 y 80.
 6. exploracion_fisica: solo hallazgos explorados o medidos. Los síntomas referidos van en padecimiento_actual.
 7. Completa TODAS las llaves. Prioriza plan, medicamentos, pronostico, seguimiento y receta (titulo_receta, resumen_paciente, indicaciones_receta, alarmas) si el dictado trae diagnóstico o tratamiento.
-8. medicamentos: un item por fármaco recetado. Si no hay, [].
+8. medicamentos: un item por fármaco recetado. Si no hay, []. La vía es obligatoria (NOM-004 6.2.6): si el médico dice "tomar", "se va a tomar", tableta o cápsula, via = "oral". IM/IV/SC solo si se dictan.
 9. pronostico: breve (bueno, reservado, malo o una frase clínica) si hay diagnóstico. Si no hay base, "".
 10. seguimiento: cita o plazo de revisión dictado (p. ej. "Cita de revisión en 5 días").
 11. notas_evolucion: solo si hay evolución o control dictado; si no, "".
@@ -245,6 +245,7 @@ export function completarSoapOneshot(soap: SoapOneshot, borrador: string): SoapO
       instruccion: row.instruccion,
     }));
   }
+  receta.medicamentos = completarViasMedicamentos(receta.medicamentos, fuente);
   if (!receta.titulo) {
     const dx = primeraFrase(analisis).replace(/\s*\(.*$/, "").slice(0, 80);
     receta.titulo = dx ? `Tratamiento para ${dx}` : plan ? "Tratamiento indicado" : "";

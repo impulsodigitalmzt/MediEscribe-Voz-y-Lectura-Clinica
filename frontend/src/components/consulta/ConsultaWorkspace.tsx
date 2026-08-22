@@ -14,8 +14,6 @@ import ConsentimientoInformado from './ConsentimientoInformado';
 import { stampMexicoNow } from '../../utils';
 import { asegurarNotaStrings, extraerSoapDesdeRespuesta, mapearNotaDesdeIA, notaClinicaVacia, transcripcionPlana } from '../../lib/mapearNotaClinica';
 import { validarNotaNom004 } from '../../lib/validarNom004';
-import { completarRecetaDesdeSoap } from '../../lib/completarReceta';
-import { asegurarPlanYMedicamentos } from '../../lib/completarPlan';
 
 const EMPTY_NOTA: NotaClinica = notaClinicaVacia();
 
@@ -259,11 +257,13 @@ export default function ConsultaWorkspace() {
     pintarSoapIndependiente(datos);
   };
 
-  const aplicarSoapEnUnaPasada = (soap: {
+  const aplicarSoapJson = (soap: {
     motivo_consulta?: string;
     padecimiento_actual?: string;
+    interrogatorio?: string;
     subjetivo?: string;
     objetivo?: string;
+    exploracion_fisica?: string;
     analisis?: string;
     plan?: string;
     signos_vitales?: Partial<SignosVitales>;
@@ -276,57 +276,38 @@ export default function ConsultaWorkspace() {
       seguimiento?: string;
     };
   }) => {
-    console.log('Datos listos para pintar:', soap);
-    const texto = (value?: string) => (typeof value === 'string' ? value.trim() : '');
-    const motivo = texto(soap.motivo_consulta);
-    const padecimiento = texto(soap.padecimiento_actual) || texto(soap.subjetivo);
-    const objetivo = texto(soap.objetivo);
-    const analisis = texto(soap.analisis);
-    const planYMeds = asegurarPlanYMedicamentos({
-      plan: texto(soap.plan),
-      medicamentos: soap.receta?.medicamentos,
-      borrador: dictado,
-    });
-    const plan = planYMeds.plan;
-    console.log('Plan aislado:', plan || '(vacío)');
-    console.log('Receta aislada medicamentos:', planYMeds.medicamentos.length ? planYMeds.medicamentos : '(vacío)');
-    const recetaCompleta = completarRecetaDesdeSoap({
-      receta: {
-        ...(soap.receta ?? {}),
-        medicamentos: planYMeds.medicamentos.length ? planYMeds.medicamentos : soap.receta?.medicamentos,
-      },
-      analisis,
-      plan,
-      borrador: dictado,
-    });
-    console.log('Receta título aislado:', recetaCompleta.titulo || '(vacío)');
-    console.log('Receta resumen aislado:', recetaCompleta.resumen || '(vacío)');
-    console.log('Receta indicaciones aisladas:', recetaCompleta.indicaciones || '(vacío)');
-    console.log('Alarmas aisladas:', recetaCompleta.alarmas || '(vacío)');
-    console.log('Seguimiento aislado:', recetaCompleta.seguimiento || '(vacío)');
-    const recetaPatch: Partial<RecetaPaciente> = {};
-    if (recetaCompleta.titulo) recetaPatch.titulo = recetaCompleta.titulo;
-    if (recetaCompleta.resumen) recetaPatch.resumen = recetaCompleta.resumen;
-    if (recetaCompleta.indicaciones) recetaPatch.indicaciones = recetaCompleta.indicaciones;
-    if (recetaCompleta.alarmas) recetaPatch.alarmas = recetaCompleta.alarmas;
-    if (recetaCompleta.seguimiento) recetaPatch.seguimiento = recetaCompleta.seguimiento;
-    if (planYMeds.medicamentos.length) recetaPatch.medicamentos = planYMeds.medicamentos;
-    else if (recetaCompleta.medicamentos.length) recetaPatch.medicamentos = recetaCompleta.medicamentos;
+    console.log('SOAP oneshot listo para pintar:', soap);
+    const campo = (value?: string) => (typeof value === 'string' ? value.trim() : '');
+    const motivo = campo(soap.motivo_consulta);
+    const padecimiento = campo(soap.padecimiento_actual) || campo(soap.subjetivo);
+    const interrogatorio = campo(soap.interrogatorio);
+    const exploracion = campo(soap.exploracion_fisica) || campo(soap.objetivo);
+    const analisis = campo(soap.analisis);
+    const plan = campo(soap.plan);
+    const recetaIn = soap.receta ?? {};
+    const meds = Array.isArray(recetaIn.medicamentos)
+      ? recetaIn.medicamentos.filter((row) => row.medicamento?.trim())
+      : [];
+    const recetaPatch: Partial<RecetaPaciente> = {
+      titulo: campo(recetaIn.titulo),
+      resumen: campo(recetaIn.resumen),
+      indicaciones: campo(recetaIn.indicaciones),
+      alarmas: campo(recetaIn.alarmas),
+      seguimiento: campo(recetaIn.seguimiento),
+      medicamentos: meds,
+    };
 
     let notaAplicada = nota;
     let cuantos = 0;
     flushSync(() => {
       setNota((prev) => {
-        const conservar = (entrante: string, actual?: string) => ((actual ?? '').trim() ? actual! : entrante);
-        const signosPrev = prev.signos_vitales ?? {};
-        const nextSignos = { ...signosPrev };
+        const nextSignos = { ...(prev.signos_vitales ?? {}) };
         const vitalKeys: Array<keyof SignosVitales> = [
           'ta_sistolica', 'ta_diastolica', 'temperatura', 'fc', 'fr', 'spo2', 'peso', 'talla', 'imc', 'glucosa',
         ];
         for (const key of vitalKeys) {
-          const actual = texto(signosPrev[key]);
-          const valor = texto(soap.signos_vitales?.[key]);
-          if (!actual && valor && valor !== '0') nextSignos[key] = valor;
+          const valor = campo(soap.signos_vitales?.[key]);
+          if (valor && valor !== '0') nextSignos[key] = valor;
         }
         const kg = Number.parseFloat((nextSignos.peso || '').replace(',', '.'));
         const cm = Number.parseFloat((nextSignos.talla || '').replace(',', '.'));
@@ -334,40 +315,45 @@ export default function ConsultaWorkspace() {
           const metros = cm > 3 ? cm / 100 : cm;
           nextSignos.imc = (kg / (metros * metros)).toFixed(2);
         }
-        const meds = recetaPatch.medicamentos ?? [];
-        const tratamiento = meds.length
-          ? meds.map((row) => ({
-            medicamento: row.medicamento,
-            dosis: row.dosis,
-            via: row.via,
-            periodicidad: row.periodicidad,
-          }))
-          : prev.tratamiento;
         const next = asegurarNotaStrings({
           ...prev,
-          motivo_consulta: conservar(motivo, prev.motivo_consulta),
-          padecimiento_actual: conservar(padecimiento, prev.padecimiento_actual),
-          subjetivo: conservar(padecimiento, prev.subjetivo),
-          objetivo: conservar(objetivo, prev.objetivo),
-          exploracion_fisica: conservar(objetivo, prev.exploracion_fisica),
+          motivo_consulta: motivo || prev.motivo_consulta,
+          padecimiento_actual: padecimiento || prev.padecimiento_actual,
+          subjetivo: padecimiento || prev.subjetivo,
+          interrogatorio: interrogatorio || prev.interrogatorio,
+          objetivo: exploracion || prev.objetivo,
+          exploracion_fisica: exploracion || prev.exploracion_fisica,
           analisis: analisis || prev.analisis,
           diagnostico: analisis || prev.diagnostico,
           plan: plan || prev.plan,
           seguimiento: recetaPatch.seguimiento || prev.seguimiento,
           signos_vitales: nextSignos as SignosVitales,
-          tratamiento,
+          tratamiento: meds.length
+            ? meds.map((row) => ({
+              medicamento: row.medicamento,
+              dosis: row.dosis,
+              via: row.via,
+              periodicidad: row.periodicidad,
+            }))
+            : prev.tratamiento,
         });
-        cuantos =
-          Number(Boolean(plan))
-          + Number(Boolean(meds.length))
-          + Number(Boolean(analisis))
-          + Object.keys(recetaPatch).length;
+        cuantos = [
+          motivo, padecimiento, interrogatorio, exploracion, analisis, plan,
+          recetaPatch.titulo, recetaPatch.resumen, recetaPatch.indicaciones,
+          recetaPatch.alarmas, recetaPatch.seguimiento,
+        ].filter(Boolean).length + Object.values(nextSignos).filter((v) => v && v !== '0').length + meds.length;
         notaAplicada = next;
         return next;
       });
-      if (Object.keys(recetaPatch).length) {
-        setReceta((prev) => ({ ...prev, ...recetaPatch }));
-      }
+      setReceta((prev) => ({
+        ...prev,
+        titulo: recetaPatch.titulo || prev.titulo,
+        resumen: recetaPatch.resumen || prev.resumen,
+        indicaciones: recetaPatch.indicaciones || prev.indicaciones,
+        alarmas: recetaPatch.alarmas || prev.alarmas,
+        seguimiento: recetaPatch.seguimiento || prev.seguimiento,
+        medicamentos: meds.length ? meds : prev.medicamentos,
+      }));
     });
     setGuardia(validarNotaNom004(notaAplicada));
     return cuantos;
@@ -403,7 +389,7 @@ export default function ConsultaWorkspace() {
     setSavedMsg('');
     try {
       const soap = await api.extraerSoapAislado(texto);
-      const cuantos = aplicarSoapEnUnaPasada(soap);
+      const cuantos = aplicarSoapJson(soap);
       if (cuantos > 0) {
         setSavedMsg('Nota SOAP sintetizada. Revise S-O-A-P; los campos sin dato clínico quedaron vacíos.');
       } else {

@@ -21,7 +21,7 @@ import {
 } from "../lib/consultas";
 import { exigirPaciente, isUuid, listHistorialPaciente } from "../lib/pacientes";
 import { forzarNotaTextoPlano, type NotaClinica, type RecetaPaciente } from "../lib/nota-clinica";
-import { extraerSoapAislado } from "../lib/motivo-aislado";
+import { extraerSoapOneshot, soapOneshotVacio } from "../lib/soap-oneshot";
 import { modeloGroqChat } from "../lib/groq";
 import { textoCampoClinico } from "../lib/texto-campo";
 import { registrarConsentimientoConsulta } from "../lib/consentimiento";
@@ -196,60 +196,42 @@ consultaRoutes.post("/texto", async (c) => {
   }
 });
 
-consultaRoutes.post("/motivo-aislado", async (c) => {
+async function payloadSoapOneshot(env: Env, texto: string) {
+  const soap = await extraerSoapOneshot(env, texto);
+  return {
+    ...soap,
+    motivo: soap.motivo_consulta,
+    medicamentos: soap.receta.medicamentos,
+    alarmas: soap.receta.alarmas,
+    seguimiento: soap.receta.seguimiento,
+  };
+}
+
+consultaRoutes.post("/soap", async (c) => {
   try {
     if (!c.env.GROQ_API_KEY) {
-      return c.json(
-        {
-          motivo: "",
-          motivo_consulta: "",
-          padecimiento_actual: "",
-          subjetivo: "",
-          objetivo: "",
-          analisis: "",
-          plan: "",
-          signos_vitales: {
-            ta_sistolica: "",
-            ta_diastolica: "",
-            temperatura: "",
-            fc: "",
-            fr: "",
-            spo2: "",
-            peso: "",
-            talla: "",
-            imc: "",
-            glucosa: "",
-          },
-          receta: {
-            titulo: "",
-            resumen: "",
-            indicaciones: "",
-            medicamentos: [],
-            alarmas: "",
-            seguimiento: "",
-          },
-          error: "GROQ_API_KEY no está configurada.",
-        },
-        500
-      );
+      return c.json({ ...soapOneshotVacio(), motivo: "", medicamentos: [], error: "GROQ_API_KEY no está configurada." }, 500);
     }
     const body = (await c.req.json<{ texto?: string; transcripcion?: string }>().catch(() => ({}))) as {
       texto?: string;
       transcripcion?: string;
     };
-    const texto = String(body.texto ?? body.transcripcion ?? "").trim();
-    const soap = await extraerSoapAislado(c.env, texto);
-    console.log("Motivo aislado (worker):", soap.motivo_consulta);
-    console.log("SOAP aislado listo (worker):", soap);
-    return c.json(
-      {
-        motivo: soap.motivo_consulta,
-        ...soap,
-        alarmas: soap.receta.alarmas,
-        seguimiento: soap.receta.seguimiento,
-      },
-      200
-    );
+    return c.json(await payloadSoapOneshot(c.env, String(body.texto ?? body.transcripcion ?? "").trim()), 200);
+  } catch (error) {
+    return consultaError(c, error, "soap_oneshot_failed");
+  }
+});
+
+consultaRoutes.post("/motivo-aislado", async (c) => {
+  try {
+    if (!c.env.GROQ_API_KEY) {
+      return c.json({ ...soapOneshotVacio(), motivo: "", medicamentos: [], error: "GROQ_API_KEY no está configurada." }, 500);
+    }
+    const body = (await c.req.json<{ texto?: string; transcripcion?: string }>().catch(() => ({}))) as {
+      texto?: string;
+      transcripcion?: string;
+    };
+    return c.json(await payloadSoapOneshot(c.env, String(body.texto ?? body.transcripcion ?? "").trim()), 200);
   } catch (error) {
     return consultaError(c, error, "motivo_aislado_failed");
   }

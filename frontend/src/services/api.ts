@@ -423,8 +423,10 @@ class ApiService {
   async extraerSoapAislado(texto: string): Promise<{
     motivo_consulta: string;
     padecimiento_actual: string;
+    interrogatorio: string;
     subjetivo: string;
     objetivo: string;
+    exploracion_fisica: string;
     analisis: string;
     plan: string;
     signos_vitales: {
@@ -460,15 +462,17 @@ class ApiService {
     const vacio = {
       motivo_consulta: '',
       padecimiento_actual: '',
+      interrogatorio: '',
       subjetivo: '',
       objetivo: '',
+      exploracion_fisica: '',
       analisis: '',
       plan: '',
       signos_vitales: { ...vacioSignos },
       receta: { ...vacioReceta, medicamentos: [] },
     };
     const token = this.getAccessToken();
-    const response = await fetch(`${API_BASE}/api/consultas-medicas/motivo-aislado`, {
+    const response = await fetch(`${API_BASE}/api/consultas-medicas/soap`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -506,7 +510,9 @@ class ApiService {
         const value = recetaRaw[key];
         return typeof value === 'string' ? value.trim() : '';
       };
-      const medsRaw = recetaRaw.medicamentos;
+      const medsRaw = Array.isArray(recetaRaw.medicamentos)
+        ? recetaRaw.medicamentos
+        : json.medicamentos;
       const medicamentos = Array.isArray(medsRaw)
         ? medsRaw
           .map((item) => {
@@ -524,11 +530,13 @@ class ApiService {
         : [];
       const soap = {
         motivo_consulta: textoDe('motivo_consulta', 'motivo'),
-        padecimiento_actual: textoDe('padecimiento_actual'),
+        padecimiento_actual: textoDe('padecimiento_actual', 'subjetivo'),
+        interrogatorio: textoDe('interrogatorio'),
         subjetivo: textoDe('subjetivo', 'padecimiento_actual'),
-        objetivo: textoDe('objetivo'),
-        analisis: textoDe('analisis'),
-        plan: textoDe('plan'),
+        objetivo: textoDe('objetivo', 'exploracion_fisica'),
+        exploracion_fisica: textoDe('exploracion_fisica', 'objetivo'),
+        analisis: textoDe('analisis', 'diagnostico'),
+        plan: textoDe('plan', 'plan_tratamiento'),
         signos_vitales: {
           ta_sistolica: signo('ta_sistolica'),
           ta_diastolica: signo('ta_diastolica'),

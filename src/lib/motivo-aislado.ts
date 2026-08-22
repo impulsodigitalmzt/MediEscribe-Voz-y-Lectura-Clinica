@@ -1,6 +1,7 @@
 import { groqChatPlainText } from "./groq";
 import { vacioSignosVitales, type RecetaPaciente, type SignosVitales } from "./nota-types";
 import { extraerMedicamentosDeTexto, planDesdeBorrador } from "./plan-terapeutico";
+import { extraerSoapOneshot } from "./soap-oneshot";
 
 export type RecetaAislada = Pick<
   RecetaPaciente,
@@ -453,84 +454,19 @@ function completarRecetaSiFalta(receta: RecetaAislada, texto: string, analisis: 
   return receta;
 }
 
-/** Cada campo se pide a Groq por separado. SOAP, signos y receta arrancan juntos. */
+/** Compatibilidad: el llenado SOAP usa una sola llamada a Groq. */
 export async function extraerSoapAislado(env: Env, textoBorrador: string): Promise<SoapAislado> {
-  const texto = textoBorrador.trim();
-  if (!texto) return { ...SOAP_VACIO, signos_vitales: vacioSignosVitales(), receta: { ...RECETA_VACIA, medicamentos: [] } };
-
-  const camposSoap: CampoSoap[] = [
-    "motivo_consulta",
-    "padecimiento_actual",
-    "objetivo",
-    "analisis",
-  ];
-  const camposVital = Object.keys(PROMPTS_VITAL) as Array<Exclude<CampoVital, "imc">>;
-
-  const [
-    valoresSoap,
-    valoresVital,
-    titulo,
-    resumen,
-    indicaciones,
-    alarmas,
-    seguimiento,
-    planYMeds,
-  ] = await Promise.all([
-    Promise.all(
-      camposSoap.map((campo) => {
-        const spec = PROMPTS_SOAP[campo];
-        return extraerCampoIndependiente(env, texto, campo, spec.system, spec.maxLen);
-      })
-    ),
-    Promise.all(
-      camposVital.map((campo) => extraerVitalIndependiente(env, texto, campo, PROMPTS_VITAL[campo]))
-    ),
-    extraerRecetaTituloAislado(env, texto),
-    extraerRecetaResumenAislado(env, texto),
-    extraerRecetaIndicacionesAisladas(env, texto),
-    extraerAlarmasAisladas(env, texto),
-    extraerSeguimientoAislado(env, texto),
-    extraerPlanYMedicamentosControlado(env, texto),
-  ]);
-
-  const soap: SoapAislado = {
-    ...SOAP_VACIO,
-    signos_vitales: vacioSignosVitales(),
-    receta: { ...RECETA_VACIA, medicamentos: [] },
+  const soap = await extraerSoapOneshot(env, textoBorrador);
+  return {
+    motivo_consulta: soap.motivo_consulta,
+    padecimiento_actual: soap.padecimiento_actual,
+    subjetivo: soap.subjetivo,
+    objetivo: soap.objetivo,
+    analisis: soap.analisis,
+    plan: soap.plan,
+    signos_vitales: soap.signos_vitales,
+    receta: soap.receta,
   };
-  camposSoap.forEach((campo, index) => {
-    soap[campo] = valoresSoap[index] ?? "";
-  });
-  soap.plan = planYMeds.plan;
-  soap.subjetivo = soap.padecimiento_actual;
-  camposVital.forEach((campo, index) => {
-    soap.signos_vitales[campo] = valoresVital[index] ?? "";
-  });
-  soap.signos_vitales.imc = calcImc(soap.signos_vitales.peso, soap.signos_vitales.talla);
-  soap.receta = completarRecetaSiFalta(
-    {
-      titulo,
-      resumen,
-      indicaciones,
-      medicamentos: planYMeds.medicamentos,
-      alarmas,
-      seguimiento,
-    },
-    texto,
-    soap.analisis,
-    soap.plan
-  );
-
-  console.log("Receta aislada lista:", {
-    titulo: soap.receta.titulo || "(vacío)",
-    resumen: soap.receta.resumen || "(vacío)",
-    indicaciones: soap.receta.indicaciones || "(vacío)",
-    medicamentos: soap.receta.medicamentos.length,
-    alarmas: soap.receta.alarmas || "(vacío)",
-    seguimiento: soap.receta.seguimiento || "(vacío)",
-  });
-  console.log("SOAP aislado (worker):", JSON.stringify(soap));
-  return soap;
 }
 
 export async function extraerMotivoConsultaAislado(env: Env, textoBorrador: string): Promise<string> {

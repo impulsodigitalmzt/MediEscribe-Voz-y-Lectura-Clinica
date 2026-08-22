@@ -66,7 +66,7 @@ export type GroqChatMessage = {
 };
 
 function maxTokensForModel(model: string, requested?: number): number {
-  const compact = /gpt-3\.5|turbo-instruct|8b/i.test(model) ? 2200 : 3500;
+  const compact = /gpt-oss/i.test(model) ? 8192 : /gpt-3\.5|turbo-instruct|8b/i.test(model) ? 2200 : 3500;
   return Math.min(requested ?? compact, compact);
 }
 
@@ -234,10 +234,20 @@ export async function groqChatJson(
         content = await readGroqStreamContent(response, MAX_GROQ_JSON_CHARS);
       } else {
         const data = (await response.json()) as {
-          choices?: Array<{ message?: { content?: string } }>;
+          choices?: Array<{
+            finish_reason?: string;
+            message?: { content?: string; reasoning?: string };
+          }>;
           error?: { message?: string };
         };
-        content = data.choices?.[0]?.message?.content ?? "";
+        const message = data.choices?.[0]?.message;
+        content = (message?.content || message?.reasoning || "").trim();
+        const finishReason = data.choices?.[0]?.finish_reason ?? "";
+        logGroq("groq_chat_finish", {
+          ...groqKeyMeta(env),
+          finishReason,
+          contentChars: content.length,
+        });
         if (content.length > MAX_GROQ_JSON_CHARS) {
           throw new AppError(502, "La nota generada excedió el tamaño permitido.", "GROQ_RESPONSE_TOO_LARGE");
         }
@@ -285,7 +295,13 @@ export async function groqChatJson(
       logGroq("groq_chat_invalid_json", {
         message: parseError instanceof Error ? parseError.message : "parse_error",
         contentChars: content.length,
+        attempt,
       });
+      if (attempt === 0) {
+        useStream = false;
+        maxTokens = Math.min(maxTokens + 2048, /gpt-oss/i.test(model) ? 8192 : 3500);
+        continue;
+      }
       throw new AppError(502, "Groq devolvió JSON inválido para la nota médica.", "GROQ_INVALID_JSON");
     }
   }
@@ -474,12 +490,77 @@ export async function transcribeAudio(
   return { text, language: normalizeLanguageCode(data.language) };
 }
 
+function repararJsonTruncado(text: string): string {
+  let s = text.trim();
+  const start = s.indexOf("{");
+  if (start < 0) throw new SyntaxError("no json object");
+  s = s.slice(start);
+  let inString = false;
+  let escape = false;
+  for (const ch of s) {
+    if (inString) {
+      if (escape) {
+        escape = false;
+        continue;
+      }
+      if (ch === "\\") {
+        escape = true;
+        continue;
+      }
+      if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+  }
+  if (inString) s += '"';
+  s = s.replace(/,\s*$/, "");
+  let braces = 0;
+  let brackets = 0;
+  inString = false;
+  escape = false;
+  for (const ch of s) {
+    if (inString) {
+      if (escape) {
+        escape = false;
+        continue;
+      }
+      if (ch === "\\") {
+        escape = true;
+        continue;
+      }
+      if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      continue;
+    }
+    if (ch === "{") braces += 1;
+    if (ch === "}") braces -= 1;
+    if (ch === "[") brackets += 1;
+    if (ch === "]") brackets -= 1;
+  }
+  while (brackets > 0) {
+    s += "]";
+    brackets -= 1;
+  }
+  while (braces > 0) {
+    s += "}";
+    braces -= 1;
+  }
+  return s;
+}
+
 export function parseJsonObject(content: string): PolishedNote {
   let text = content.trim();
   if (text.startsWith("```")) {
     text = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
   }
-  return JSON.parse(text) as PolishedNote;
+  try {
+    return JSON.parse(text) as PolishedNote;
+  } catch {
+    return JSON.parse(repararJsonTruncado(text)) as PolishedNote;
+  }
 }
 
 function fallbackNote(raw: Record<string, string>): PolishedNote {

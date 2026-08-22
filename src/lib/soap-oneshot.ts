@@ -1,4 +1,5 @@
 import { groqChatJson } from "./groq";
+import { extraerMedicamentosDeTexto, planDesdeBorrador } from "./plan-terapeutico";
 import { vacioSignosVitales, type RecetaPaciente, type SignosVitales } from "./nota-types";
 
 export type MedicamentoOneshot = {
@@ -60,24 +61,36 @@ export function soapOneshotVacio(): SoapOneshot {
 const SYSTEM_PROMPT = `Eres médico redactor de MediEscribe (NOM-004-SSA3). Lees UN dictado conversacional y devuelves UN solo objeto JSON con la nota SOAP completa.
 
 REGLAS:
-1. Una sola respuesta: SOLO el JSON, sin markdown ni texto extra.
+1. Una sola respuesta: SOLO el JSON, sin markdown ni texto extra. JSON compacto (sin saltos de línea).
 2. Extrae y redacta en tono clínico formal, tercera persona. No copies saludos ni el diálogo crudo.
 3. Si un dato no está en el dictado, usa "" o [] . No inventes fármacos, dosis, estudios, signos ni citas.
 4. Si el texto es solo saludo o prueba de micrófono, todos los campos van vacíos.
-5. Signos vitales: solo números (sin unidades). TA 120/80 → ta_sistolica "120" y ta_diastolica "80". Notación 12/8 → 120 y 80. Si hay fiebre referida y una temperatura medida ahora, usa la medida ahora.
+5. Signos vitales: solo números (sin unidades). TA 120/80 → ta_sistolica "120" y ta_diastolica "80". Notación 12/8 → 120 y 80.
 6. exploracion_fisica: solo hallazgos explorados o medidos. Los síntomas referidos van en padecimiento_actual.
-7. plan: formal y estructurado (fármaco, dosis, vía, frecuencia, duración; estudios; reposo/hidratación) SOLO con lo dictado.
+7. Completa TODAS las llaves. Prioriza plan, medicamentos, pronostico, seguimiento y receta (titulo_receta, resumen_paciente, indicaciones_receta, alarmas) si el dictado trae diagnóstico o tratamiento.
 8. medicamentos: un item por fármaco recetado. Si no hay, [].
-9. pronostico: breve (bueno, reservado, malo o una frase clínica) si el cuadro lo permite. Si no hay base, "".
-10. seguimiento: cita o plazo de revisión dictado (p. ej. "Cita de revisión en 5 días"). Copia el mismo valor en receta.seguimiento.
+9. pronostico: breve (bueno, reservado, malo o una frase clínica) si hay diagnóstico. Si no hay base, "".
+10. seguimiento: cita o plazo de revisión dictado (p. ej. "Cita de revisión en 5 días").
 11. notas_evolucion: solo si hay evolución o control dictado; si no, "".
-12. Receta para el paciente: no dejes vacíos titulo_receta, resumen_paciente, indicaciones_receta ni alarmas si el dictado trae diagnóstico o tratamiento. También rellena receta.titulo, receta.resumen, receta.indicaciones, receta.alarmas y receta.seguimiento con el mismo contenido.
 
-Llaves EXACTAS:
+Llaves EXACTAS (plana, sin objeto receta anidado):
 {
   "motivo_consulta": "",
   "padecimiento_actual": "",
   "interrogatorio": "",
+  "exploracion_fisica": "",
+  "analisis": "",
+  "plan": "",
+  "medicamentos": [
+    { "medicamento": "", "dosis": "", "via": "", "periodicidad": "", "instruccion": "" }
+  ],
+  "pronostico": "",
+  "seguimiento": "",
+  "notas_evolucion": "",
+  "titulo_receta": "",
+  "resumen_paciente": "",
+  "indicaciones_receta": "",
+  "alarmas": "",
   "signos_vitales": {
     "ta_sistolica": "",
     "ta_diastolica": "",
@@ -89,26 +102,6 @@ Llaves EXACTAS:
     "talla": "",
     "imc": "",
     "glucosa": ""
-  },
-  "exploracion_fisica": "",
-  "analisis": "",
-  "pronostico": "",
-  "plan": "",
-  "notas_evolucion": "",
-  "seguimiento": "",
-  "medicamentos": [
-    { "medicamento": "", "dosis": "", "via": "", "periodicidad": "", "instruccion": "" }
-  ],
-  "titulo_receta": "",
-  "resumen_paciente": "",
-  "indicaciones_receta": "",
-  "alarmas": "",
-  "receta": {
-    "titulo": "",
-    "resumen": "",
-    "indicaciones": "",
-    "alarmas": "",
-    "seguimiento": ""
   }
 }`;
 
@@ -226,6 +219,81 @@ export function normalizarSoapOneshot(raw: Record<string, unknown>): SoapOneshot
   };
 }
 
+function primeraFrase(raw: string): string {
+  return raw.split(/[.\n]/).map((parte) => parte.trim()).find(Boolean) ?? "";
+}
+
+function frasesPorPatron(raw: string, patron: RegExp): string {
+  const matches = raw.match(patron);
+  if (!matches?.length) return "";
+  return matches.map((item) => item.trim()).filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
+}
+
+/** Rellena receta / plan / pronóstico / seguimiento con lo ya extraído (sin otra llamada a Groq). */
+export function completarSoapOneshot(soap: SoapOneshot, borrador: string): SoapOneshot {
+  const plan = soap.plan || planDesdeBorrador(`${borrador}\n${soap.padecimiento_actual}\n${soap.analisis}`);
+  const analisis = soap.analisis;
+  const fuente = `${borrador}\n${plan}\n${analisis}`;
+  const receta = { ...soap.receta, medicamentos: [...soap.receta.medicamentos] };
+
+  if (!receta.medicamentos.length) {
+    receta.medicamentos = extraerMedicamentosDeTexto(`${plan}\n${fuente}`).map((row) => ({
+      medicamento: row.medicamento,
+      dosis: row.dosis,
+      via: row.via,
+      periodicidad: row.periodicidad,
+      instruccion: row.instruccion,
+    }));
+  }
+  if (!receta.titulo) {
+    const dx = primeraFrase(analisis).replace(/\s*\(.*$/, "").slice(0, 80);
+    receta.titulo = dx ? `Tratamiento para ${dx}` : plan ? "Tratamiento indicado" : "";
+  }
+  if (!receta.indicaciones) {
+    receta.indicaciones = plan || frasesPorPatron(
+      fuente,
+      /[^.?!]*(?:reposo|hidrataci[oó]n|radiograf[ií]a|tomar|v[ií]a oral|cada\s+\d+)[^.?!]*[.?!]?/gi
+    );
+  }
+  if (!receta.alarmas) {
+    receta.alarmas = frasesPorPatron(
+      fuente,
+      /[^.?!]*(?:urgenc|empeor|falta(?:r)?(?:le)?(?:\s+m[aá]s)?\s+el aire|disnea|si (?:aumenta|empeora|se pone peor)|alarma)[^.?!]*[.?!]?/gi
+    );
+  }
+  if (!receta.alarmas && (plan || receta.indicaciones)) {
+    receta.alarmas = "Acudir a urgencias si hay empeoramiento, dificultad para respirar o fiebre persistente.";
+  }
+  const seguimiento =
+    soap.seguimiento
+    || receta.seguimiento
+    || frasesPorPatron(
+      fuente,
+      /[^.?!]*(?:en\s+\d+\s*d[ií]as|control(?:\s+ambulatorio)?|cita de revisi[oó]n|seguimiento|revisi[oó]n m[eé]dica)[^.?!]*[.?!]?/gi
+    );
+  receta.seguimiento = seguimiento;
+  if (!receta.resumen) {
+    const dx = primeraFrase(analisis);
+    receta.resumen = [dx ? `Le diagnosticaron ${dx}.` : "", receta.indicaciones || plan]
+      .filter(Boolean)
+      .join(" ")
+      .slice(0, 800);
+  }
+
+  const pronostico =
+    soap.pronostico
+    || frasesPorPatron(fuente, /[^.?!]*(?:pron[oó]stico|reservad[oa]|buen pron[oó]stico|mal pron[oó]stico)[^.?!]*[.?!]?/gi)
+    || (analisis ? "Reservado a la evolución clínica." : "");
+
+  return {
+    ...soap,
+    plan,
+    pronostico,
+    seguimiento,
+    receta,
+  };
+}
+
 /** Una sola llamada a Groq → un JSON con toda la nota. */
 export async function extraerSoapOneshot(env: Env, textoBorrador: string): Promise<SoapOneshot> {
   const texto = textoBorrador.trim();
@@ -237,7 +305,7 @@ export async function extraerSoapOneshot(env: Env, textoBorrador: string): Promi
       { role: "system", content: SYSTEM_PROMPT },
       { role: "user", content: texto },
     ],
-    { temperature: 0.2, maxTokens: 2800, timeoutMs: 40_000, stream: false }
+    { temperature: 0.2, maxTokens: 6000, timeoutMs: 28_000, stream: false }
   );
 
   const raiz =
@@ -247,7 +315,7 @@ export async function extraerSoapOneshot(env: Env, textoBorrador: string): Promi
         ? (parsed.nota as Record<string, unknown>)
         : parsed;
 
-  const soap = normalizarSoapOneshot(raiz);
+  const soap = completarSoapOneshot(normalizarSoapOneshot(raiz), texto);
   console.log("SOAP oneshot (worker):", JSON.stringify(soap));
   return soap;
 }

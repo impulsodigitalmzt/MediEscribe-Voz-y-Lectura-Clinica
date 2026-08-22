@@ -14,6 +14,8 @@ import ConsentimientoInformado from './ConsentimientoInformado';
 import { stampMexicoNow } from '../../utils';
 import { asegurarNotaStrings, extraerSoapDesdeRespuesta, mapearNotaDesdeIA, notaClinicaVacia, transcripcionPlana } from '../../lib/mapearNotaClinica';
 import { validarNotaNom004 } from '../../lib/validarNom004';
+import { completarRecetaDesdeSoap } from '../../lib/completarReceta';
+import { asegurarPlanYMedicamentos } from '../../lib/completarPlan';
 
 const EMPTY_NOTA: NotaClinica = notaClinicaVacia();
 
@@ -291,20 +293,30 @@ export default function ConsultaWorkspace() {
     const exploracion = campo(soap.exploracion_fisica) || campo(soap.objetivo);
     const analisis = campo(soap.analisis);
     const pronostico = campo(soap.pronostico);
-    const plan = campo(soap.plan);
     const notasEvolucion = campo(soap.notas_evolucion);
     const recetaIn = soap.receta ?? {};
-    const meds = Array.isArray(recetaIn.medicamentos)
-      ? recetaIn.medicamentos.filter((row) => row.medicamento?.trim())
-      : [];
+    const planAsegurado = asegurarPlanYMedicamentos({
+      plan: campo(soap.plan),
+      medicamentos: recetaIn.medicamentos,
+      borrador: dictado,
+    });
+    const plan = planAsegurado.plan;
+    const recetaCompleta = completarRecetaDesdeSoap({
+      receta: { ...recetaIn, medicamentos: planAsegurado.medicamentos },
+      analisis,
+      plan,
+      borrador: dictado,
+    });
+    const meds = recetaCompleta.medicamentos.filter((row) => row.medicamento?.trim());
     const recetaPatch: Partial<RecetaPaciente> = {
-      titulo: campo(recetaIn.titulo) || campo(soap.titulo_receta),
-      resumen: campo(recetaIn.resumen) || campo(soap.resumen_paciente),
-      indicaciones: campo(recetaIn.indicaciones) || campo(soap.indicaciones_receta),
-      alarmas: campo(recetaIn.alarmas) || campo(soap.alarmas),
-      seguimiento: campo(recetaIn.seguimiento) || campo(soap.seguimiento),
+      titulo: recetaCompleta.titulo || campo(soap.titulo_receta),
+      resumen: recetaCompleta.resumen || campo(soap.resumen_paciente),
+      indicaciones: recetaCompleta.indicaciones || campo(soap.indicaciones_receta),
+      alarmas: recetaCompleta.alarmas || campo(soap.alarmas),
+      seguimiento: recetaCompleta.seguimiento || campo(soap.seguimiento),
       medicamentos: meds,
     };
+    const pronosticoPintar = pronostico || (analisis ? 'Reservado a la evolución clínica.' : '');
     console.log('[SOAP] Asignación a receta inferior:', recetaPatch);
     console.log('[SOAP] Pronóstico / seguimiento / evolución:', {
       pronostico, seguimiento: recetaPatch.seguimiento, notas_evolucion: notasEvolucion,
@@ -338,7 +350,7 @@ export default function ConsultaWorkspace() {
           exploracion_fisica: exploracion || prev.exploracion_fisica,
           analisis: analisis || prev.analisis,
           diagnostico: analisis || prev.diagnostico,
-          pronostico: pronostico || prev.pronostico,
+          pronostico: pronosticoPintar || prev.pronostico,
           plan: plan || prev.plan,
           notas_evolucion: notasEvolucion || prev.notas_evolucion,
           seguimiento: recetaPatch.seguimiento || prev.seguimiento,
@@ -353,7 +365,7 @@ export default function ConsultaWorkspace() {
             : prev.tratamiento,
         });
         cuantos = [
-          motivo, padecimiento, interrogatorio, exploracion, analisis, pronostico, plan, notasEvolucion,
+          motivo, padecimiento, interrogatorio, exploracion, analisis, pronosticoPintar, plan, notasEvolucion,
           recetaPatch.titulo, recetaPatch.resumen, recetaPatch.indicaciones,
           recetaPatch.alarmas, recetaPatch.seguimiento,
         ].filter(Boolean).length + Object.values(nextSignos).filter((v) => v && v !== '0').length + meds.length;

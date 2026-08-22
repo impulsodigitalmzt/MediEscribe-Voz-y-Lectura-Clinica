@@ -54,6 +54,9 @@ export function completarRecetaDesdeSoap(input: {
       /[^.?!]*(?:urgenc|empeor|falta(?:r)?(?:le)?(?:\s+m[aá]s)?\s+el aire|disnea|si (?:aumenta|empeora|se pone peor)|alarma)[^.?!]*[.?!]?/gi,
     );
   }
+  if (!receta.alarmas && (plan || receta.indicaciones)) {
+    receta.alarmas = 'Acudir a urgencias si hay empeoramiento, dificultad para respirar o fiebre persistente.';
+  }
   if (!receta.seguimiento) {
     receta.seguimiento = frasesPorPatron(
       fuente,

@@ -202,6 +202,9 @@ async function payloadSoapOneshot(env: Env, texto: string) {
     ...soap,
     motivo: soap.motivo_consulta,
     medicamentos: soap.receta.medicamentos,
+    titulo_receta: soap.receta.titulo,
+    resumen_paciente: soap.receta.resumen,
+    indicaciones_receta: soap.receta.indicaciones,
     alarmas: soap.receta.alarmas,
     seguimiento: soap.receta.seguimiento,
   };

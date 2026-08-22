@@ -275,6 +275,11 @@ export default function ConsultaWorkspace() {
       alarmas?: string;
       seguimiento?: string;
     };
+    titulo_receta?: string;
+    resumen_paciente?: string;
+    indicaciones_receta?: string;
+    alarmas?: string;
+    seguimiento?: string;
   }) => {
     console.log('SOAP oneshot listo para pintar:', soap);
     const campo = (value?: string) => (typeof value === 'string' ? value.trim() : '');
@@ -289,13 +294,14 @@ export default function ConsultaWorkspace() {
       ? recetaIn.medicamentos.filter((row) => row.medicamento?.trim())
       : [];
     const recetaPatch: Partial<RecetaPaciente> = {
-      titulo: campo(recetaIn.titulo),
-      resumen: campo(recetaIn.resumen),
-      indicaciones: campo(recetaIn.indicaciones),
-      alarmas: campo(recetaIn.alarmas),
-      seguimiento: campo(recetaIn.seguimiento),
+      titulo: campo(recetaIn.titulo) || campo(soap.titulo_receta),
+      resumen: campo(recetaIn.resumen) || campo(soap.resumen_paciente),
+      indicaciones: campo(recetaIn.indicaciones) || campo(soap.indicaciones_receta),
+      alarmas: campo(recetaIn.alarmas) || campo(soap.alarmas),
+      seguimiento: campo(recetaIn.seguimiento) || campo(soap.seguimiento),
       medicamentos: meds,
     };
+    console.log('[SOAP] Asignación a receta inferior:', recetaPatch);
 
     let notaAplicada = nota;
     let cuantos = 0;

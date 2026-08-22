@@ -62,7 +62,7 @@ REGLAS:
 6. exploracion_fisica: solo hallazgos explorados o medidos. Los síntomas referidos van en padecimiento_actual.
 7. plan: formal y estructurado (fármaco, dosis, vía, frecuencia, duración; estudios; reposo/hidratación) SOLO con lo dictado.
 8. medicamentos: un item por fármaco recetado. Si no hay, [].
-9. receta: texto para el paciente (título, resumen 2–4 frases, indicaciones, alarmas, seguimiento) solo con lo dictado o sintetizado de ese mismo contenido.
+9. Receta para el paciente: rellena receta.titulo / titulo_receta, receta.resumen / resumen_paciente, receta.indicaciones / indicaciones_receta, alarmas y seguimiento. Si el dictado trae tratamiento, no dejes esos campos vacíos.
 
 Llaves EXACTAS:
 {
@@ -171,12 +171,32 @@ export function normalizarSoapOneshot(raw: Record<string, unknown>): SoapOneshot
     plan: texto(raw.plan) || texto(raw.plan_tratamiento),
     signos_vitales: signos,
     receta: {
-      titulo: texto(recetaRaw.titulo) || texto(raw.receta_titulo),
-      resumen: texto(recetaRaw.resumen) || texto(raw.receta_resumen),
-      indicaciones: texto(recetaRaw.indicaciones) || texto(raw.receta_indicaciones),
+      titulo:
+        texto(recetaRaw.titulo)
+        || texto(recetaRaw.titulo_receta)
+        || texto(raw.titulo_receta)
+        || texto(raw.receta_titulo),
+      resumen:
+        texto(recetaRaw.resumen)
+        || texto(recetaRaw.resumen_paciente)
+        || texto(raw.resumen_paciente)
+        || texto(raw.receta_resumen),
+      indicaciones:
+        texto(recetaRaw.indicaciones)
+        || texto(recetaRaw.indicaciones_receta)
+        || texto(raw.indicaciones_receta)
+        || texto(raw.receta_indicaciones),
       medicamentos,
-      alarmas: texto(recetaRaw.alarmas) || texto(raw.alarmas),
-      seguimiento: texto(recetaRaw.seguimiento) || texto(raw.seguimiento),
+      alarmas:
+        texto(recetaRaw.alarmas)
+        || texto(raw.alarmas)
+        || texto(raw.receta_alarmas)
+        || texto(recetaRaw.alarmas_receta),
+      seguimiento:
+        texto(recetaRaw.seguimiento)
+        || texto(raw.seguimiento)
+        || texto(raw.receta_seguimiento)
+        || texto(recetaRaw.seguimiento_receta),
     },
   };
 }

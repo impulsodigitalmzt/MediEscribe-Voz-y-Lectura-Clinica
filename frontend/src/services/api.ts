@@ -489,26 +489,27 @@ class ApiService {
     }
     try {
       const json = JSON.parse(raw) as Record<string, unknown>;
+      console.log('[SOAP] JSON completo del Worker:', json);
+      console.log('[SOAP] Llaves del Worker:', Object.keys(json));
+      const recetaRaw = json.receta && typeof json.receta === 'object'
+        ? json.receta as Record<string, unknown>
+        : {};
+      console.log('[SOAP] receta anidada:', recetaRaw);
       const textoDe = (...keys: string[]) => {
-        for (const key of keys) {
-          const value = json[key];
-          if (typeof value === 'string' && value.trim()) return value.trim();
+        for (const fuente of [json, recetaRaw]) {
+          for (const key of keys) {
+            const value = fuente[key];
+            if (typeof value === 'string' && value.trim()) return value.trim();
+          }
         }
         return '';
       };
       const signosRaw = json.signos_vitales && typeof json.signos_vitales === 'object'
         ? json.signos_vitales as Record<string, unknown>
         : {};
-      const recetaRaw = json.receta && typeof json.receta === 'object'
-        ? json.receta as Record<string, unknown>
-        : {};
       const signo = (key: string) => {
         const value = signosRaw[key];
         return typeof value === 'string' && value.trim() && value.trim() !== '0' ? value.trim() : '';
-      };
-      const recetaTexto = (key: string) => {
-        const value = recetaRaw[key];
-        return typeof value === 'string' ? value.trim() : '';
       };
       const medsRaw = Array.isArray(recetaRaw.medicamentos)
         ? recetaRaw.medicamentos
@@ -528,6 +529,31 @@ class ApiService {
           })
           .filter((row) => row.medicamento)
         : [];
+      const deFuente = (fuente: Record<string, unknown>, ...keys: string[]) => {
+        for (const key of keys) {
+          const value = fuente[key];
+          if (typeof value === 'string' && value.trim()) return value.trim();
+        }
+        return '';
+      };
+      const recetaMapeada = {
+        titulo:
+          deFuente(json, 'titulo_receta', 'receta_titulo')
+          || deFuente(recetaRaw, 'titulo_receta', 'titulo', 'receta_titulo'),
+        resumen:
+          deFuente(json, 'resumen_paciente', 'receta_resumen', 'resumen_para_el_paciente')
+          || deFuente(recetaRaw, 'resumen_paciente', 'resumen', 'receta_resumen'),
+        indicaciones:
+          deFuente(json, 'indicaciones_receta', 'receta_indicaciones')
+          || deFuente(recetaRaw, 'indicaciones_receta', 'indicaciones', 'receta_indicaciones'),
+        medicamentos,
+        alarmas:
+          deFuente(json, 'alarmas', 'receta_alarmas', 'alarmas_receta')
+          || deFuente(recetaRaw, 'alarmas', 'receta_alarmas', 'alarmas_receta'),
+        seguimiento:
+          deFuente(json, 'seguimiento', 'receta_seguimiento', 'seguimiento_receta')
+          || deFuente(recetaRaw, 'seguimiento', 'receta_seguimiento', 'seguimiento_receta'),
+      };
       const soap = {
         motivo_consulta: textoDe('motivo_consulta', 'motivo'),
         padecimiento_actual: textoDe('padecimiento_actual', 'subjetivo'),
@@ -549,15 +575,9 @@ class ApiService {
           imc: signo('imc'),
           glucosa: signo('glucosa'),
         },
-        receta: {
-          titulo: recetaTexto('titulo') || textoDe('receta_titulo'),
-          resumen: recetaTexto('resumen') || textoDe('receta_resumen'),
-          indicaciones: recetaTexto('indicaciones') || textoDe('receta_indicaciones'),
-          medicamentos,
-          alarmas: recetaTexto('alarmas') || textoDe('alarmas', 'receta_alarmas'),
-          seguimiento: recetaTexto('seguimiento') || textoDe('seguimiento', 'receta_seguimiento'),
-        },
+        receta: recetaMapeada,
       };
+      console.log('[SOAP] Receta mapeada a casillas:', soap.receta);
       console.log('SOAP aislado recibido:', soap);
       return soap;
     } catch {
